@@ -12,12 +12,12 @@
 
 use std::{collections::VecDeque, fmt::Error as StdError, pin::Pin};
 use tokio::sync::Mutex;
-use crate::interfaces::ElevatorHeapI;
+use crate::{elevator_controller::ElevatorController, interfaces::ElevatorHeapI};
 
 
 #[derive(Debug)]
 pub struct ElevatorHeap {
-    elevators : VecDeque<MiniElevator>,
+    elevators : VecDeque<ElevatorController>,
     mutation_permit: Mutex<bool>,
 }
 
@@ -31,23 +31,23 @@ impl ElevatorHeapI for ElevatorHeap {
         ElevatorHeap { elevators: VecDeque::new(), mutation_permit:Mutex::new(true) }
     }
     
-    // Get elevator receive floor where the call was made.
-    // It will return a elevator based on these criteria:
-    // 1. Least load
-    async fn get_elevator(&mut self) -> usize {
+    async fn get_elevator(&mut self) -> Option<ElevatorController> {
         match self.elevators.pop_front() {
             Some(e) => {
-                return e.id
+                return Some(e)
             },
             None =>{
-                return 0 as usize
+                return None
             }
         }
     }
 
-    async fn insert_elevator(&mut self, elevator: MiniElevator) -> Result<(), StdError> {
+    async fn insert_elevator(&mut self, elevator_controller: ElevatorController) -> Result<(), StdError> {
         let _ = self.mutation_permit.lock().await;
-        self.elevators.push_back(MiniElevator { id: elevator.id, current_load: elevator.current_load, direction:elevator.direction });
+        
+        self.elevators.push_back(
+            elevator_controller
+        );
         let _ = self.heapify(true, self.elevators.len()-1).await;
 
         Ok(())
@@ -66,9 +66,16 @@ impl ElevatorHeapI for ElevatorHeap {
                 break;
             }
 
-            if self.elevators.get(pos).unwrap().id == elevator_id {
-                remove_at = pos;
-                break;
+            let e = self.elevators.get(pos);
+            match e {
+                Some(controller) => {
+                    let elevator = controller.elevator.lock().await;
+                    if elevator.id == elevator_id {
+                        remove_at = pos;
+                        break;
+                    }
+                },
+                None => {}
             }
 
             pos+=1;
@@ -120,13 +127,23 @@ impl ElevatorHeap {
 
         let parent_index = (index - 1)/2;
 
-        let parent_elevator = self.elevators.get(parent_index);
-        let target_elevator = self.elevators.get(index);
+        let parent = self.elevators.get(parent_index);
+        let target = self.elevators.get(index);
 
-        if parent_elevator.is_some() && target_elevator.is_some(){
-            if target_elevator.unwrap().current_load >= parent_elevator.unwrap().current_load {
+        if parent.is_some() && target.is_some(){
+            let parent_elevator_controller = parent.unwrap();
+            let target_elevator_controller = target.unwrap();
+
+
+            let parent_elevator = parent_elevator_controller.elevator.lock().await;
+            let target_elevator = target_elevator_controller.elevator.lock().await;
+
+            if target_elevator.current_load >= parent_elevator.current_load {
                 return Ok(())
             }
+
+            drop(parent_elevator);
+            drop(target_elevator);
 
             // Swap
             self.elevators.swap(parent_index, index);

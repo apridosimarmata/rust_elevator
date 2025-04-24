@@ -1,12 +1,13 @@
 use std::{ sync::Arc, time};
-use elevator_controller::ElevatorController;
-use interfaces::ElevatorControllerI;
+use central_elevator_controller::CentralElevatorController;
+use interfaces::{CentralElevatorControllerI, ElevatorControllerI};
 use tokio::time::sleep;
 
 
 mod elevator_heap;
 mod interfaces;
 mod elevator;
+mod central_elevator_controller;
 mod elevator_controller;
 
 #[tokio::main]
@@ -15,7 +16,7 @@ async fn main() {
     /* elevators_state_stream */
     // let (tx, rx) : (Sender<Vec<Elevator>>, Receiver<Vec<Elevator>>) = channel(10);
 
-    let elevator_controller = Arc::new(ElevatorController::new().await);
+    let elevator_controller = Arc::new(CentralElevatorController::new().await);
 
 
 

@@ -1,134 +1,91 @@
-use std::{collections::HashMap, fmt::Error, sync::Arc};
+use core::time;
+use std::{collections::{HashMap, VecDeque}, fmt::Error, sync:: Arc, thread::sleep};
 
-use tokio::sync::broadcast::Sender;
+use tokio::sync::broadcast::{Sender, Receiver};
 use tokio::sync::Mutex;
-use tokio::sync::broadcast::{Receiver, channel};
-use crate::elevator::ElevatorState;
-use crate::elevator_heap::MiniElevator;
-use crate::{
-    elevator::Elevator,
-    elevator_heap::ElevatorHeap,
-    interfaces::{ElevatorControllerI, ElevatorHeapI, ElevatorI},
-};
 
+use crate::{elevator::{Elevator, ElevatorState}, interfaces::{ElevatorControllerI, ElevatorI}};
+
+#[derive(Debug, Clone)]
 pub struct ElevatorController {
-    moving_up_elevators: Mutex<ElevatorHeap>,
-    moving_down_elevators: Mutex<ElevatorHeap>,
-    idle_elevators: Mutex<ElevatorHeap>,
-    elevators: HashMap<usize, Arc<Mutex<Elevator>>>,
+    pub elevator: Arc<Mutex<Elevator>>,
+    pub destination_map: HashMap<usize, bool>,
+    pub destination_list: VecDeque<usize>,
+    pub state_transmitter: Sender<ElevatorState>,
 }
 
 impl ElevatorController {
-    pub async fn new(
-    ) -> Self {
-        let mut elevators :HashMap<usize, Arc<Mutex<Elevator>>> = HashMap::new();
-
-        for i in 0..2 {
-            let (state_tx, mut state_rx): (Sender<ElevatorState>, Receiver<ElevatorState>) = channel(100);
-            
-            let shared = Arc::new(Mutex::new(Elevator::new(i, state_tx.clone())));
-            elevators.insert(
-                i as usize, 
-                shared
-            );
-
-            tokio::spawn(async move {
-                loop{
-                    println!("waiting for a new state!");
-                    match state_rx.recv().await{
-                        Ok(state) => {
-                            println!("elevator {}: is at {} floor with current load {} and moving {}", state.id, state.current_floor, state.current_load, state.direction);
-                        },
-                        Err(e) => {
-    
-                        }
-                    }
+    pub async fn run(&self, signal_receiver: Receiver<usize>) {
+        let mut bind = signal_receiver;
+        loop {
+            match bind.recv().await{
+                Ok(signal)=> {
+                    sleep(time::Duration::from_secs(1));
+                    let _ =self.go_to_floor(signal).await;
+                },
+                Err(e) => {
+                    print!("error receiving signal {}", e )
                 }
-            });
+            }
         }
-
-        let idle_elevators = Mutex::new(ElevatorHeap::new());
-        let mut guard = idle_elevators.lock().await;
-
-
-
-        for e in elevators.clone() {
-            let elevator_guard = e.1.lock().await;
-            let _ = guard.insert_elevator(MiniElevator{
-                id: elevator_guard.id,
-                current_load: elevator_guard.current_load,
-                direction: elevator_guard.direction.clone(),
-
-            }).await;
-        }
-
-        drop(guard);
-
-        let  controller = ElevatorController {
-            elevators: elevators,
-            moving_down_elevators: Mutex::new(ElevatorHeap::new()),
-            moving_up_elevators: Mutex::new(ElevatorHeap::new()),
-            idle_elevators: idle_elevators,
-        };
-
-
-
-        return controller
     }
-
 }
 
 impl ElevatorControllerI for ElevatorController {
-    async fn get_elevators_state(&self) -> Vec<ElevatorState> {
-        let mut elevators: Vec<ElevatorState> = Vec::new();
+    async fn go_to_floor(&self, destination: usize) -> Result<(), Error> {
+        let mut elevator = self.elevator.lock().await;
 
-        let elevators_state = self.elevators.clone();
-        for item in elevators_state {
-            let elevator = item.1.lock().await;
-            elevators.push(elevator.get_state());
-        }
+        println!("{} moving to {}", elevator.id, destination);
 
-        return elevators;
-    }
+        _ = elevator.close_door().await;
 
-    async fn call_for_an_elevator(&self, floor: usize, direction: String) -> Result<(), Error> {
-        let elevator_id: usize;
-
-        // check if any idle elevator available
-        let idle_elevators = self.idle_elevators.lock().await;
-        let idles = idle_elevators.len().await;
-        drop(idle_elevators);
-
-        if idles > 0 {
-            // choose idle elevator
-            let mut idle_elevators = self.idle_elevators.lock().await;
-            elevator_id = idle_elevators.get_elevator().await;
-            drop(idle_elevators);
-        } else if direction == "up".to_string() {
-            // choose elevator that is moving up
-            let mut moving_up_elevators = self.moving_up_elevators.lock().await;
-            elevator_id = moving_up_elevators.get_elevator().await;
-            drop(moving_up_elevators);
+        if destination > elevator.current_floor {
+            elevator.direction = "up".to_string()
         } else {
-            // choose elevator that is moving down
-            let mut moving_down_elevators = self.moving_down_elevators.lock().await;
-            elevator_id = moving_down_elevators.get_elevator().await;
-            drop(moving_down_elevators);
+            elevator.direction = "down".to_string()
         }
 
-        let elevator = self.elevators.get(&elevator_id);
-        match elevator {
-            // send request to selected elevator
-            Some(e) => {
-                let bind = e.clone();
-                let mut elevator = bind.lock().await;
-                let _ = elevator.add_destination(floor).await;
-                drop(elevator);
-                return Ok(());
+        elevator.is_moving = true;
+        let current_floor = elevator.current_floor;
+
+        for i in current_floor + 1..destination + 1 {
+            sleep(time::Duration::from_secs(1));
+            elevator.current_floor = i;
+
+            let ok = self.state_transmitter.send(
+                ElevatorState {
+                    id: elevator.id,
+                    current_load: elevator.current_load,
+                    direction:elevator.direction.clone(),
+                    current_floor: elevator.current_floor
+                }
+            );
+
+            tokio::task::yield_now().await;
+
+            match ok {
+                Ok(no) => {
+                    println!("{} moving to {} : now at {} published: received by {}", elevator.id, destination, elevator.current_floor, no);
+                },
+                Err(e) => {
+                    println!("got error on publishing elevator state {} {}", elevator.id, e);
+                }
             }
-            None => {}
         }
 
+        // self.destination_map.remove(&elevator.current_floor);
+        elevator.is_moving = false;
+        _ = elevator.open_door().await;
+
+        // wait for 3 seconds before closing door
+        sleep(time::Duration::from_secs(3));
+        _ = elevator.close_door().await;
+
+        if self.destination_list.len() == 0 as usize {
+            elevator.direction = "idle".to_string();   
+        }
+
+        println!("done moving {}", elevator.id);
 
         Ok(())
     }
