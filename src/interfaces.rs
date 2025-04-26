@@ -1,22 +1,18 @@
 use std::fmt::Error;
 
-use crate::{elevator::{Elevator, ElevatorState}, elevator_controller::ElevatorController, elevator_heap::MiniElevator};
+use crate::{elevator_controller::ElevatorController, elevator_heap::MyError};
 
-
-// Used by elevator controller
 pub trait ElevatorHeapI {
      fn new() -> Self;
      async fn get_elevator(&mut self) -> Option<ElevatorController>;
-     async fn insert_elevator(&mut self, elevator: ElevatorController) -> Result<(), Error>;
-     async fn remove_elevator(&mut self, elevator_id: usize) -> Result<(), Error>;
+     async fn insert_elevator(&mut self, elevator: ElevatorController) -> Result<(), MyError>;
+     async fn remove_elevator(&mut self, elevator_id: usize) -> Option<ElevatorController>;
      async fn len(&self) -> usize;
 
 }
 
 pub trait ElevatorControllerI {
     async fn go_to_floor(&self, destination: usize) -> Result<(), Error>;
-
-    // async fn add_destination(&mut self, floor: usize) -> Result<(), Error>;
 }
 
 pub trait CentralElevatorControllerI {
@@ -26,5 +22,4 @@ pub trait CentralElevatorControllerI {
 pub trait ElevatorI {
     async fn close_door(&mut self) -> Result<(), Error>;
     async fn open_door(&mut self) -> Result<(), Error>;
-    // async fn move_to(&mut self, destination: usize) -> Result<(), Error>;
 }

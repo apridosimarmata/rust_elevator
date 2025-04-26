@@ -1,0 +1,246 @@
+// Elevator is a min-heap, where the key is the current_load of each elevator
+// Calling a get_elevator() will return an elevator that with least load
+
+//      1
+//     /  \
+//    2    5
+//   /  \ /  \
+//  7   6 9  10
+use futures::future::{self, BoxFuture};
+use std::{collections::{HashMap, VecDeque}, fmt::Error as StdError, pin::Pin, sync::Arc};
+use tokio::sync::Mutex;
+use crate::{elevator_controller::ElevatorController, interfaces::ElevatorHeapI};
+
+
+#[derive(Debug)]
+pub struct ElevatorHeap {
+    elevators : Arc<Mutex<VecDeque<ElevatorController>>>,
+    elevators_index : Arc<Mutex<HashMap<usize, usize>>>,
+}
+
+
+impl ElevatorHeapI for ElevatorHeap {
+    async fn len(&self) -> usize{
+        return self.elevators.lock().await.len();
+    }
+    
+    fn new() -> Self {
+        ElevatorHeap { elevators: Arc::new(Mutex::new(VecDeque::new())), elevators_index: Arc::new(Mutex::new(HashMap::new())) }
+    }
+    
+    async fn get_elevator(&mut self) -> Option<ElevatorController> {
+        match self.elevators.lock().await.pop_front() {
+            Some(e) => {
+                return Some(e)
+            },
+            None =>{
+                return None
+            }
+        }
+    }
+
+    async fn insert_elevator(&mut self, elevator_controller: ElevatorController) -> Result<(), StdError> {
+        let elevator_id = elevator_controller.elevator_id;
+
+        let mut elevators_index = self.elevators_index.lock().await;
+        let elevator_index_bind = elevators_index.get(&elevator_controller.elevator_id).clone();
+
+        if elevator_index_bind.is_some() {
+            let bind = *elevator_index_bind.unwrap();
+            drop(elevators_index);
+            let _ = self.heapify_up(true, bind).await;
+        }else{
+            self.elevators.lock().await.push_back(
+                elevator_controller
+            );
+            elevators_index.insert(elevator_id, self.elevators.lock().await.len()-1);
+        }
+
+        Ok(())
+    }
+
+    async fn remove_elevator(&mut self, elevator_id: usize) -> Option<ElevatorController> {
+        let elevator_controller: Option<ElevatorController> = None;
+        let mut elevators_index = self.elevators_index.lock().await;
+        elevators_index.remove(&elevator_id);
+
+        let index = elevators_index.get(&elevator_id);
+        match index {
+            Some(i) => {
+                self.elevators.lock().await.swap(*i, elevators_index.len()-1);
+                self.elevators.lock().await.pop_back();
+                let bind = *i;
+                drop(elevators_index);
+                let _ = self.heapify_down(false, bind).await;
+            },
+            None => {
+
+            }
+        }
+
+        elevator_controller
+    }
+}
+
+
+#[derive(Debug)]
+pub struct MyError {
+    message: String,
+}
+
+impl std::fmt::Display for MyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for MyError {}
+
+
+impl ElevatorHeap {
+    async fn heapify_up(&mut self, mutation_permitted: bool,index: usize) -> BoxFuture<'_, Result<(), MyError>> {
+        if index == 0 {
+            return Box::pin(future::ready(Ok(())));
+        }
+
+        let parent_index = (index - 1)/2;
+
+        let elevators = self.elevators.lock().await;
+
+        let parent = elevators.get(parent_index);
+        let target = elevators.get(index);
+
+        if parent.is_some() && target.is_some(){
+            let parent_elevator_controller = parent.unwrap();
+            let target_elevator_controller = target.unwrap();
+
+
+            let parent_elevator = parent_elevator_controller.elevator.lock().await;
+            let target_elevator = target_elevator_controller.elevator.lock().await;
+
+            if target_elevator.current_load >= parent_elevator.current_load {
+                return Box::pin(future::ready(Ok(())));
+            }
+
+            let parent_elevator_id = parent_elevator.id;
+            let target_elevator_id = target_elevator.id;
+
+            drop(parent_elevator);
+            drop(target_elevator);
+
+            // Swap
+            self.elevators.lock().await.swap(parent_index, index);
+
+            
+            let mut elevators_index = self.elevators_index.lock().await;
+
+            elevators_index.insert(parent_elevator_id, index);
+            elevators_index.insert(target_elevator_id, parent_elevator_id);
+
+            drop(elevators_index);
+            drop(elevators);
+
+            // let future = self.heapify_up(true, parent_index);
+            self.heapify_up(true, parent_index).await;
+            // let pinned_future: Pin<Box<dyn Future<Output = Result<(), MyError>> + Send>> = Box::pin(future);
+
+            // return pinned_future;
+        }
+
+
+        Box::pin(future::ready(Ok(())))
+    }
+
+    async fn heapify_down(&mut self, mutation_permitted: bool, index: usize) -> Result<(), MyError>{
+        if mutation_permitted {
+            let _ = self.mutation_permit.lock().await;
+        }
+
+        /* check if target has children */
+        let left_child_index = (index*2)+1;
+        let right_child_index = (index*2)+2;
+
+        let elevators = self.elevators.lock().await;
+
+
+        if left_child_index >= elevators.len() {
+            return Ok(())
+        }
+
+        /* === has at least one child === */
+
+        /* target elevator */
+        let target_node = elevators.get(index);
+        if target_node.is_none() {
+            return Err(MyError{message :" ok".to_string()});
+        }
+        let target_bind = target_node.unwrap();
+        let target_elevator  = target_bind.elevator.lock().await;
+        let target_elevator_id = target_elevator.id;
+        let target_elevator_load = target_elevator.current_load;
+        drop(target_elevator);
+        /* end of target elevator */
+
+        /* left elevator */
+        let left_child_node = elevators.get(left_child_index);
+        if left_child_node.is_none() {
+            return Err(MyError{message :" ok".to_string()});
+        }
+        let left_bind = left_child_node.unwrap();
+        let left_elevator = left_bind.elevator.lock().await;
+        let left_elevator_id = left_elevator.id;
+        let left_elevator_load = left_elevator.current_load;
+        drop(left_elevator);
+        /* end of left elevator */
+
+        if right_child_index >= elevators.len(){ // right child node does not exists
+            if left_elevator_load > target_elevator_load {
+                // Swap
+
+                elevators.swap(index, left_child_index);
+                self.elevators_index.insert(left_elevator_id, index);
+                self.elevators_index.insert(target_elevator_id, left_child_index);
+            }
+
+            return Ok(())
+        }
+
+        /* both right & left child exist */
+        let right_child_node = self.elevators.get(right_child_index);
+        if right_child_node.is_none() {
+            return Err(MyError{message :" ok".to_string()});
+        }
+        let right_bind = right_child_node.unwrap();
+        let right_elevator = right_bind.elevator.lock().await;
+        let right_elevator_id = right_elevator.id;
+        let right_elevator_load = right_elevator.current_load;
+        drop(right_elevator);
+
+        /* select max loaded elevator */
+        let mut max_child_index = left_child_index;
+        let mut max_load = left_elevator_load;
+        let mut max_id = left_elevator_id;
+
+        if left_elevator_load < right_elevator_load {
+            max_child_index = right_child_index;
+            max_load = right_elevator_load;
+            max_id =  right_elevator_id;
+        }
+
+
+        if target_elevator_load < max_load {
+            // Swap
+
+            self.elevators.swap(index, max_child_index);
+            self.elevators_index.insert(max_id, index);
+            self.elevators_index.insert(target_elevator_id, max_child_index);
+
+            let future = self.heapify_down(true, max_child_index);
+            let pinned_future: Pin<Box<dyn Future<Output = Result<(), MyError>> + Send>> = Box::pin(future);
+
+            return pinned_future.await;
+        }
+
+        Ok(())
+    }
+}

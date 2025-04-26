@@ -8,6 +8,7 @@ use crate::{elevator::{Elevator, ElevatorState}, interfaces::{ElevatorController
 
 #[derive(Debug, Clone)]
 pub struct ElevatorController {
+    pub elevator_id: usize,
     pub elevator: Arc<Mutex<Elevator>>,
     pub destination_map: HashMap<usize, bool>,
     pub destination_list: VecDeque<usize>,
@@ -35,9 +36,9 @@ impl ElevatorControllerI for ElevatorController {
     async fn go_to_floor(&self, destination: usize) -> Result<(), Error> {
         let mut elevator = self.elevator.lock().await;
 
-        println!("{} moving to {}", elevator.id, destination);
-
         _ = elevator.close_door().await;
+
+        let mut previous_direction = elevator.direction.clone();
 
         if destination > elevator.current_floor {
             elevator.direction = "up".to_string()
@@ -57,7 +58,8 @@ impl ElevatorControllerI for ElevatorController {
                     id: elevator.id,
                     current_load: elevator.current_load,
                     direction:elevator.direction.clone(),
-                    current_floor: elevator.current_floor
+                    current_floor: elevator.current_floor,
+                    previous_direction: previous_direction,
                 }
             );
 
@@ -65,12 +67,14 @@ impl ElevatorControllerI for ElevatorController {
 
             match ok {
                 Ok(no) => {
-                    println!("{} moving to {} : now at {} published: received by {}", elevator.id, destination, elevator.current_floor, no);
+                    // println!("{} moving to {} : now at {} published: received by {}", elevator.id, destination, elevator.current_floor, no);
                 },
                 Err(e) => {
                     println!("got error on publishing elevator state {} {}", elevator.id, e);
                 }
             }
+
+            previous_direction = elevator.direction.clone();
         }
 
         // self.destination_map.remove(&elevator.current_floor);
@@ -82,7 +86,26 @@ impl ElevatorControllerI for ElevatorController {
         _ = elevator.close_door().await;
 
         if self.destination_list.len() == 0 as usize {
-            elevator.direction = "idle".to_string();   
+            let ok = self.state_transmitter.send(
+                ElevatorState {
+                    id: elevator.id,
+                    current_load: elevator.current_load,
+                    direction:"idle".to_string(),
+                    current_floor: elevator.current_floor,
+                    previous_direction: elevator.direction.clone(),
+                }
+            );
+
+            tokio::task::yield_now().await;
+
+            match ok {
+                Ok(no) => {
+                    // println!("{} moving to {} : now at {} published: received by {}", elevator.id, destination, elevator.current_floor, no);
+                },
+                Err(e) => {
+                    println!("got error on publishing elevator state {} {}", elevator.id, e);
+                }
+            }
         }
 
         println!("done moving {}", elevator.id);
