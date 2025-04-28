@@ -11,24 +11,39 @@ pub struct ElevatorController {
     pub elevator_id: usize,
     pub elevator: Arc<Mutex<Elevator>>,
     pub destination_map: HashMap<usize, bool>,
-    pub destination_list: VecDeque<usize>,
+    pub destination_list:Arc<Mutex<VecDeque<usize>>>,
     pub state_transmitter: Sender<ElevatorState>,
 }
 
 impl ElevatorController {
-    pub async fn run(&self, signal_receiver: Receiver<usize>) {
+    pub async fn listen_request(&self, signal_receiver: Receiver<usize>) {
         let mut bind = signal_receiver;
         loop {
             match bind.recv().await{
                 Ok(signal)=> {
-                    sleep(time::Duration::from_secs(1));
-                    let _ =self.go_to_floor(signal).await;
+                    println!("new request for {}, to go to {}", self.elevator_id, signal);
+                    let _ = self.destination_list.lock().await.push_front(signal);
                 },
                 Err(e) => {
                     print!("error receiving signal {}", e )
                 }
             }
         }
+    }
+
+    pub async fn serve(&self) {
+        loop {
+            sleep(time::Duration::from_millis(100));
+            let next =  self.destination_list.lock().await.pop_back();
+            match next {
+                Some(floor) => {
+                    let _ = self.go_to_floor(floor).await;
+                },
+                None => {
+
+                }
+            }
+        }   
     }
 }
 
@@ -37,8 +52,7 @@ impl ElevatorControllerI for ElevatorController {
         let mut elevator = self.elevator.lock().await;
 
         _ = elevator.close_door().await;
-
-        let mut previous_direction = elevator.direction.clone();
+        let previous_direction = elevator.direction.clone();
 
         if destination > elevator.current_floor {
             elevator.direction = "up".to_string()
@@ -50,16 +64,14 @@ impl ElevatorControllerI for ElevatorController {
         let current_floor = elevator.current_floor;
 
         for i in current_floor + 1..destination + 1 {
-            sleep(time::Duration::from_secs(1));
             elevator.current_floor = i;
-
             let ok = self.state_transmitter.send(
                 ElevatorState {
                     id: elevator.id,
                     current_load: elevator.current_load,
-                    direction:elevator.direction.clone(),
                     current_floor: elevator.current_floor,
-                    previous_direction: previous_direction,
+                    direction:elevator.direction.clone(),
+                    initial_direction: previous_direction.clone(),
                 }
             );
 
@@ -73,8 +85,7 @@ impl ElevatorControllerI for ElevatorController {
                     println!("got error on publishing elevator state {} {}", elevator.id, e);
                 }
             }
-
-            previous_direction = elevator.direction.clone();
+            sleep(time::Duration::from_secs(1));
         }
 
         // self.destination_map.remove(&elevator.current_floor);
@@ -85,14 +96,14 @@ impl ElevatorControllerI for ElevatorController {
         sleep(time::Duration::from_secs(3));
         _ = elevator.close_door().await;
 
-        if self.destination_list.len() == 0 as usize {
+        if self.destination_list.lock().await.len() == 0 as usize {
             let ok = self.state_transmitter.send(
                 ElevatorState {
                     id: elevator.id,
                     current_load: elevator.current_load,
                     direction:"idle".to_string(),
                     current_floor: elevator.current_floor,
-                    previous_direction: elevator.direction.clone(),
+                    initial_direction:elevator.direction.clone(),
                 }
             );
 
@@ -106,6 +117,8 @@ impl ElevatorControllerI for ElevatorController {
                     println!("got error on publishing elevator state {} {}", elevator.id, e);
                 }
             }
+        }else {
+            
         }
 
         println!("done moving {}", elevator.id);

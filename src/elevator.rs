@@ -1,7 +1,6 @@
 use core::time;
-use std::{collections::{HashMap, VecDeque}, fmt::Error, sync::Arc, thread::sleep};
+use std::{fmt::Error, thread::sleep};
 
-use tokio::sync::broadcast::Sender;
 
 use crate::interfaces::ElevatorI;
 
@@ -25,7 +24,7 @@ pub struct ElevatorState {
     pub current_floor: usize,
     pub current_load: usize,
     pub direction: String,
-    pub previous_direction: String,
+    pub initial_direction: String,
 }
 
 impl Elevator {

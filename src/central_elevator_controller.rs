@@ -1,95 +1,87 @@
 use std::collections::VecDeque;
-use std::os::macos::raw::stat;
+use std::thread::sleep;
+use std::time::{self, Duration};
 use std::{collections::HashMap, fmt::Error, sync::Arc};
 
-use tokio::sync::broadcast::Sender;
-use tokio::sync::Mutex;
-use tokio::sync::broadcast::{Receiver, channel};
 use crate::elevator::ElevatorState;
 use crate::elevator_controller::ElevatorController;
+use crate::elevator_pools::elevator_queue::ElevatorQueue;
 use crate::interfaces::CentralElevatorControllerI;
-use crate::{
-    elevator::Elevator,
-    elevator_heap::ElevatorHeap,
-    interfaces::ElevatorHeapI,
-};
+use crate::{elevator::Elevator, interfaces::ElevatorPool};
+use tokio::sync::Mutex;
+use tokio::sync::broadcast::Sender;
+use tokio::sync::broadcast::{Receiver, channel};
 
+/* Elevator controller */
+/* 1. Hold all the elevator controllers */
+/* 2. Storing their state based on their respective state */
 #[derive(Debug)]
 pub struct CentralElevatorController {
-    moving_up_elevators: Mutex<ElevatorHeap>,
-    moving_down_elevators: Mutex<ElevatorHeap>,
-    idle_elevators: Mutex<ElevatorHeap>,
+    moving_up_elevators: Mutex<ElevatorQueue>,
+    moving_down_elevators: Mutex<ElevatorQueue>,
+    idle_elevators: Mutex<ElevatorQueue>,
     signal_transmitter: HashMap<usize, Sender<usize>>,
+    elevators: HashMap<usize, Mutex<ElevatorController>>,
 }
 
 impl CentralElevatorController {
-    pub async fn listen_elevator_state(&self, state_receiver: Receiver<ElevatorState>){
+    pub async fn listen_elevator_state(&self, state_receiver: Receiver<ElevatorState>) {
         let mut bind = state_receiver;
 
-        loop{
-            match bind.recv().await{
+        loop {
+            match bind.recv().await {
                 Ok(state) => {
-                    // println!("elevator {}: is at {} floor with current load {} and moving {} {}", state.id, state.current_floor, state.current_load, state.previous_direction, state.previous_direction.as_str() == "idle");
+                    // let mut elevator_controller: Option<ElevatorController> = None;
+                    println!("STATE: {} floor {}", state.id, state.current_floor);
 
-                    println!("direction : {}\nprev direction: {} ", state.direction, state.previous_direction);
-
-                    let mut elevator_controller: Option<ElevatorController> = None;
-
-                    match state.previous_direction.as_str() {
-                        "idle" => {
-                            println!("removed from idle");
-                            elevator_controller = self.idle_elevators.lock().await.remove_elevator(state.id).await;
-                        },
+                    /* adjust elevator state */
+                    match state.direction.as_str() {
                         "up" => {
-                            elevator_controller = self.moving_up_elevators.lock().await.remove_elevator(state.id).await;
+                            let _ = self.moving_up_elevators.lock().await.insert_elevator(state.clone()).await;
                         },
                         "down" => {
-                            elevator_controller = self.moving_down_elevators.lock().await.remove_elevator(state.id).await;
+                            let _ = self.moving_down_elevators.lock().await.insert_elevator(state.clone()).await;
+
                         },
-                        &_ => {}
+                        "idle" => {
+                            let _ = self.idle_elevators.lock().await.insert_elevator(state.clone()).await;
+                        },
+                        &_ =>{}
                     }
 
-                    println!("her! {} {:?}", state.direction.as_str(), elevator_controller);
-                    match elevator_controller.is_some() {
+                    /* an elevator becomes idle */
+                    match state.direction.as_str() == "idle" {
                         true => {
-                            match state.direction.as_str() {
-                                "idle" => {
-                                    println!("should be inserted to idle");
-                                    let _ = self.idle_elevators.lock().await.insert_elevator(elevator_controller.unwrap()).await;
-                                },
+                            match state.initial_direction.as_str() {
                                 "up" => {
-                                    println!("should be inserted to up");
-                                    let _ = self.moving_up_elevators.lock().await.insert_elevator(elevator_controller.unwrap()).await;
+                                    self.moving_up_elevators.lock().await.remove_elevator(state.id).await;
                                 },
-                                "down" => {
-                                    let _ = self.moving_down_elevators.lock().await.insert_elevator(elevator_controller.unwrap()).await;
+                                "down"=> {
+                                    self.moving_down_elevators.lock().await.remove_elevator(state.id).await;
                                 },
                                 &_ => {}
                             }
                         },
                         false => {
-                            println!("her!2");
+
                         }
                     }
-                },
+                }
                 Err(e) => {
-                    println!("got error when receiving elevator state {}", e);
+                    println!("Failed to get elevator state");
                 }
             }
 
-            // println!("idle elevators {:?}", self.idle_elevators);
-            // println!("ups {:?}", self.moving_up_elevators);
-            // println!("downs {:?}", self.moving_down_elevators);
-
-            println!("");
-
+            sleep(time::Duration::from_secs(1));
         }
     }
 
-    pub async fn new(
-    ) -> Arc<CentralElevatorController> {
-        let mut idle_elevators = ElevatorHeap::new();
-        let mut signal_transmitter: HashMap<usize, Sender<usize>>=  HashMap::new();
+    pub async fn new() -> Arc<CentralElevatorController> {
+        /* Elevator containers */
+        let mut idle_elevators = ElevatorQueue::new();
+        let mut elevator_controllers: HashMap<usize, Mutex<ElevatorController>> = HashMap::new();
+
+        let mut signal_transmitter: HashMap<usize, Sender<usize>> = HashMap::new();
         let mut state_receivers: Vec<Receiver<ElevatorState>> = Vec::new();
 
         /* Building elevators */
@@ -103,33 +95,46 @@ impl CentralElevatorController {
             signal_transmitter.insert(i, signal_tx);
 
             /* Put the elevator to idles elevator */
-            let elevator_controller = ElevatorController{
+            let elevator_controller = ElevatorController {
                 elevator: shared,
                 elevator_id: i,
                 destination_map: HashMap::new(),
-                destination_list: VecDeque::new(),
+                destination_list: Arc::new(Mutex::new(VecDeque::new())),
                 state_transmitter: state_tx,
             };
 
             /* Runner for receiving requests from central controller */
-            let runner_controller_bind = elevator_controller.clone();
+            let elevator_request_listener_bind = elevator_controller.clone();
             tokio::spawn(async move {
-                runner_controller_bind.run(signal_rx).await;
+                elevator_request_listener_bind.listen_request(signal_rx).await;
             });
 
-            let _ = idle_elevators.insert_elevator(elevator_controller).await;
-            idle_elevators.elevators_index.lock().await.insert(i, i);
+            let elevator_request_serve_bind = elevator_controller.clone();
+            tokio::spawn(async move {
+                elevator_request_serve_bind.serve().await;
+            });
+
+            elevator_controllers.insert(i, Mutex::new(elevator_controller));
+
+            let _ = idle_elevators
+                .insert_elevator(ElevatorState {
+                    id: i,
+                    current_floor: 0,
+                    current_load: 0,
+                    direction: "idle".to_string(),
+                    initial_direction: "idle".to_string(),
+                })
+                .await;
+            // idle_elevators.elevators_index.lock().await.insert(i, i);
         }
 
-
-        let controller = Arc::new(
-            CentralElevatorController {
-                moving_down_elevators: Mutex::new(ElevatorHeap::new()),
-                moving_up_elevators: Mutex::new(ElevatorHeap::new()),
-                idle_elevators: Mutex::new(idle_elevators),
-                signal_transmitter: signal_transmitter,
-            }
-        );
+        let controller = Arc::new(CentralElevatorController {
+            moving_down_elevators: Mutex::new(ElevatorQueue::new()),
+            moving_up_elevators: Mutex::new(ElevatorQueue::new()),
+            idle_elevators: Mutex::new(idle_elevators),
+            signal_transmitter: signal_transmitter,
+            elevators: elevator_controllers,
+        });
 
         for state_rx in state_receivers {
             let bind_controller = controller.clone();
@@ -139,15 +144,13 @@ impl CentralElevatorController {
             });
         }
 
-        return controller
+        return controller;
     }
-
 }
 
 impl CentralElevatorControllerI for CentralElevatorController {
-
     async fn call_for_an_elevator(&self, floor: usize, direction: String) -> Result<(), Error> {
-        let elevator: Option<ElevatorController>;
+        let mut elevator: Option<ElevatorState> = None;
 
         /* Check if any idle elevator available */
         let idle_elevators = self.idle_elevators.lock().await;
@@ -172,27 +175,20 @@ impl CentralElevatorControllerI for CentralElevatorController {
         }
 
         match elevator {
-            // send request to selected elevator
             Some(e) => {
-                let elevator = e.elevator.lock().await;
-                let elevator_id = elevator.id;
-                drop(elevator);
-
-                let transmitter = self.signal_transmitter.get(&elevator_id);
-                match transmitter {
-                    Some(t) => {
-                        let _ = t.send(floor);
-                    },
-                    None => {
-
-                    },
+                /* send request to elevator */
+                let signal_transmitter = self.signal_transmitter.get(&e.id);
+                match signal_transmitter {
+                    Some(tx) => {
+                        let _ = tx.send(floor);
+                    }
+                    None => {}
                 }
-
-                return Ok(())
             }
-            None => {}
+            None => {
+                println!("ran out of elevators!");
+            }
         }
-
 
         Ok(())
     }

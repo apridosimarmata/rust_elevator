@@ -6,7 +6,7 @@
 //    2    5
 //   /  \ /  \
 //  7   6 9  10
-use crate::{elevator_controller::ElevatorController, interfaces::ElevatorHeapI};
+use crate::{elevator_controller::ElevatorController, interfaces::ElevatorPool};
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
@@ -20,7 +20,7 @@ pub struct ElevatorHeap {
     pub elevators_index: Arc<Mutex<HashMap<usize, usize>>>,
 }
 
-impl ElevatorHeapI for ElevatorHeap {
+impl ElevatorPool for ElevatorHeap {
     async fn len(&self) -> usize {
         return self.elevators.lock().await.len();
     }
@@ -31,27 +31,24 @@ impl ElevatorHeapI for ElevatorHeap {
             elevators_index: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-
-    async fn get_elevator(&mut self) -> Option<ElevatorController> {
-        match self.elevators.lock().await.pop_front() {
-            Some(e) => return Some(e),
-            None => return None,
-        }
+    
+    async fn get_elevator_id(&mut self) -> Option<usize> {
+        todo!()
+    }
+    
+    async fn get_elevator(&mut self) -> Option<crate::elevator::ElevatorState> {
+        todo!()
+    }
+    
+    async fn insert_elevator(&mut self, elevator: crate::elevator::ElevatorState) -> Result<(), MyError> {
+        todo!()
+    }
+    
+    async fn remove_elevator(&mut self, elevator_id: usize) -> Option<crate::elevator::ElevatorState> {
+        todo!()
     }
 
-    async fn insert_elevator(
-        &mut self,
-        elevator_controller: ElevatorController,
-    ) -> Result<(), MyError> {
 
-
-        Ok(())
-    }
-
-    async fn remove_elevator(&mut self, elevator_id: usize) -> Option<ElevatorController> {
- 
-        None
-    }
 }
 
 #[derive(Debug)]
