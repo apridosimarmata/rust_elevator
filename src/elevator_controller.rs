@@ -10,7 +10,7 @@ use crate::{elevator::{Elevator, ElevatorState}, interfaces::{ElevatorController
 pub struct ElevatorController {
     pub elevator_id: usize,
     pub elevator: Arc<Mutex<Elevator>>,
-    pub destination_map: HashMap<usize, bool>,
+    pub destination_map: Arc<Mutex<HashMap<usize, bool>>>,
     pub destination_list:Arc<Mutex<VecDeque<usize>>>,
     pub state_transmitter: Sender<ElevatorState>,
 }
@@ -22,6 +22,17 @@ impl ElevatorController {
             match bind.recv().await{
                 Ok(signal)=> {
                     println!("new request for {}, to go to {}", self.elevator_id, signal);
+                    let destinations =  self.destination_map.lock().await;
+                    let in_destination_list = destinations.get(&signal);
+                    match in_destination_list {
+                        Some(_) => {
+                            continue;
+                        },
+                        None => {
+                            println!("already in destination");
+                        }
+                    }
+
                     let _ = self.destination_list.lock().await.push_front(signal);
                 },
                 Err(e) => {
@@ -117,11 +128,9 @@ impl ElevatorControllerI for ElevatorController {
                     println!("got error on publishing elevator state {} {}", elevator.id, e);
                 }
             }
-        }else {
+        } else {
             
         }
-
-        println!("done moving {}", elevator.id);
 
         Ok(())
     }

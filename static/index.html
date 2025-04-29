@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html style="display: flex; flex-direction: row; justify-content: center;">
+
+<head>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"
+        integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+</head>
+
+<body style="max-width: 1200px;">
+    <!-- <div class="main-section">
+        <h3>Create job</h3>
+        <p>Master, I will sleep as many times as you want for 2 seconds. But, I know that you need me, so I will finish
+            my sleep job as fast as I can.</p>
+        <div class="job-form">
+            <div>
+                <label for="name">Your name, master. Perhaps, the real one.</label>
+                <input type="text" name="name" />
+            </div>
+            <div>
+                <label for="n">How many times should I sleep?</label>
+                <input type="number" name="n" />
+            </div>
+            <div>
+                <button>Send request</button>
+            </div>
+        </div>
+    </div> -->
+    <div class="main-section">
+        <h3>My progress</h3>
+        <p>Master, here's my sleep job report.</p>
+        <div id="progresses">
+            <table id="progresses-table" style="width: 100%;">
+                <tr>
+                    <th>ID</th>
+                    <th>By</th>
+                    <th>No. of sleep</th>
+                    <th>Status</th>
+                    <th>Started at</th>
+                    <th>Finished at</th>
+                    <th>Seq. time</th>
+                    <th>Actual time</th>
+                    <th>Progress</th>
+                </tr>
+            </table>
+        </div>
+    </div>
+</body>
+<footer>
+    <script>
+        // Stream to the server
+        const eventSource = new EventSource('/api/v1/jobs/stream');
+
+        eventSource.onmessage = (event) => {
+            let event_data = $.parseJSON(event.data);
+            console.log(event_data);
+            let job_row_exsist = $('#' + event_data["job_id"]).length > 0;
+            if (!job_row_exsist) {
+                $('#progresses-table').append(`
+                <tr id="`+ event_data["job_id"] + `">
+                            <td>`+ event_data["job_id"] + `</td>
+                            <td class="requested-by">` + event_data["created_by"] + `</td>
+                            <td class="n">` + event_data["no_of_sleep"] + `</td>
+                            <td class="status">` + event_data["status"] + `</td>
+                            <td class="created-at">` + event_data["created_at"] + `</td>
+                            <td class="finished-at">` + event_data["finished_at"] + `</td>
+                            <td class="sequential-time">` + event_data["no_of_sleep"] * 2 + ` seconds</td>
+                            <td class="actual-time">` + event_data["actual_time"] + ` seconds</td>
+                            <td class="progress-percentage">` +( event_data["no_of_progress"]/event_data["no_of_sleep"]*100).toFixed(2) + ` %</td>
+                <tr>
+                `);
+            }else{
+                const counter = $(`#${event_data["job_id"]} .n:first`);
+                const finished_at = $(`#${event_data["job_id"]} .finished-at:first`);
+                const status = $(`#${event_data["job_id"]} .status:first`);
+                const actual_time = $(`#${event_data["job_id"]} .actual-time:first`);
+                const progress_percentage = $(`#${event_data["job_id"]} .progress-percentage:first`);
+                progress_percentage.html(( event_data["no_of_progress"]/event_data["no_of_sleep"]*100).toFixed(2) + "%")
+
+                status.html(event_data["status"]);
+                if (event_data["status"] == "PROGRESSING") {
+                    status.html("PROGRESSING 🚀")
+                    actual_time.html(event_data["actual_time"] + " seconds");
+
+                }else if (event_data["status"] == "COMPLETED") {
+                    status.html("COMPLETED ✅");
+                    finished_at.html(event_data["finished_at"]);
+                    actual_time.html(event_data["actual_time"] + " seconds");
+                }
+            }
+
+        };
+        eventSource.onerror = (error) => {
+            console.error('EventSource error:', error);
+        };
+
+    </script>
+</footer>
+<style>
+    .main-section {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .job-form {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-around;
+    }
+    tr {
+        height: 30px;
+    }
+</style>
+
+</html>

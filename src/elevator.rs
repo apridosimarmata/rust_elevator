@@ -2,6 +2,8 @@ use core::time;
 use std::{fmt::Error, thread::sleep};
 
 
+use serde::{Deserialize, Serialize};
+
 use crate::interfaces::ElevatorI;
 
 #[derive(Debug)]
@@ -18,7 +20,7 @@ pub struct Elevator {
     pub direction: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ElevatorState {
     pub id: usize,
     pub current_floor: usize,
