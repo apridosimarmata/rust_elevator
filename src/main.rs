@@ -1,11 +1,9 @@
-use core::time;
-use std::{path::PathBuf, sync::Arc, thread::sleep};
+use std::{path::PathBuf, sync::Arc};
 
 use actix_files::NamedFile;
 use actix_web::{web, App, HttpRequest, HttpServer, Result};
 use central_elevator_controller::CentralElevatorController;
-use elevator::{Elevator, ElevatorState};
-use interfaces::CentralElevatorControllerI;
+use elevator::{ElevatorState};
 use http::handler::register_job_routes;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
 

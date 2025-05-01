@@ -49,8 +49,6 @@ impl ElevatorHTTPHandLerImpl {
 
 impl ElevatorHTTPHandler for ElevatorHTTPHandLerImpl {
     async fn get_elevator (&self) ->  impl Responder{
-        println!("called");
-
         let bind = self.central_elevator_controller.clone();
 
         tokio::spawn(async move {

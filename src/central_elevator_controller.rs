@@ -1,13 +1,13 @@
 use std::collections::VecDeque;
 use std::thread::sleep;
-use std::time::{self, Duration};
+use std::time::{self};
 use std::{collections::HashMap, fmt::Error, sync::Arc};
 
 use crate::elevator::ElevatorState;
 use crate::elevator_controller::ElevatorController;
 use crate::elevator_pools::elevator_queue::ElevatorQueue;
 use crate::interfaces::CentralElevatorControllerI;
-use crate::{elevator::Elevator, interfaces::ElevatorPool};
+use crate::interfaces::ElevatorPool;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::sync::broadcast::Sender;
 use tokio::sync::broadcast::{Receiver, channel};
@@ -17,9 +17,12 @@ use tokio::sync::broadcast::{Receiver, channel};
 /* 2. Storing their state based on their respective state */
 #[derive(Debug)]
 pub struct CentralElevatorController {
+    
     moving_up_elevators: Mutex<ElevatorQueue>,
     moving_down_elevators: Mutex<ElevatorQueue>,
     idle_elevators: Mutex<ElevatorQueue>,
+
+
     signal_transmitter: HashMap<usize, Sender<usize>>,
     elevators: HashMap<usize, Mutex<ElevatorController>>,
     permits: Mutex<Semaphore>,
@@ -93,7 +96,6 @@ impl CentralElevatorController {
         /* Building elevators */
         for i in 0..2 {
             let (state_tx, state_rx): (Sender<ElevatorState>, Receiver<ElevatorState>) = channel(1);
-            let shared = Arc::new(Mutex::new(Elevator::new(i)));
 
             state_receivers.insert(i, state_rx);
 
@@ -101,23 +103,12 @@ impl CentralElevatorController {
             signal_transmitter.insert(i, signal_tx);
 
             /* Put the elevator to idles elevator */
-            let elevator_controller = ElevatorController {
-                elevator: shared,
-                elevator_id: i,
-                destination_map: Arc::new(Mutex::new(HashMap::new())),
-                destination_list: Arc::new(Mutex::new(VecDeque::new())),
-                state_transmitter: state_tx,
-            };
+            let elevator_controller = ElevatorController::new(i, state_tx);
 
             /* Runner for receiving requests from central controller */
             let elevator_request_listener_bind = elevator_controller.clone();
             tokio::spawn(async move {
                 elevator_request_listener_bind.listen_request(signal_rx).await;
-            });
-
-            let elevator_request_serve_bind = elevator_controller.clone();
-            tokio::spawn(async move {
-                elevator_request_serve_bind.serve().await;
             });
 
             elevator_controllers.insert(i, Mutex::new(elevator_controller));
@@ -129,6 +120,8 @@ impl CentralElevatorController {
                     current_load: 0,
                     direction: "idle".to_string(),
                     initial_direction: "idle".to_string(),
+                    is_door_open: false,
+                    is_moving: false,
                 })
                 .await;
             // idle_elevators.elevators_index.lock().await.insert(i, i);
@@ -165,14 +158,13 @@ impl CentralElevatorControllerI for CentralElevatorController {
         let mut elevator: Option<ElevatorState> = None;
 
         /* Check if any idle elevator available */
-        let idle_elevators = self.idle_elevators.lock().await;
+        let mut idle_elevators = self.idle_elevators.lock().await;
         let idles = idle_elevators.len().await;
-        drop(idle_elevators);
 
         if idles > 0 {
             /* Choose idle elevator */
-            let mut idle_elevators = self.idle_elevators.lock().await;
             elevator = idle_elevators.get_elevator().await;
+            drop(idle_elevators);
         } else if direction == "up".to_string() {
             /* Choose elevator that is moving up */
             let mut moving_up_elevators = self.moving_up_elevators.lock().await;

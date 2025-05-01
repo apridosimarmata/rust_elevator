@@ -1,69 +1,121 @@
 use core::time;
-use std::{collections::{HashMap, VecDeque}, fmt::Error, sync:: Arc, thread::sleep};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt::Error,
+    sync::Arc,
+    thread::sleep,
+};
 
-use tokio::sync::broadcast::{Sender, Receiver};
 use tokio::sync::Mutex;
+use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::{elevator::{Elevator, ElevatorState}, interfaces::{ElevatorControllerI, ElevatorI}};
+use crate::{
+    elevator::ElevatorState,
+    interfaces::{ElevatorControllerI, ElevatorI},
+};
 
 #[derive(Debug, Clone)]
 pub struct ElevatorController {
-    pub elevator_id: usize,
-    pub elevator: Arc<Mutex<Elevator>>,
+    pub state: ElevatorState,
+
     pub destination_map: Arc<Mutex<HashMap<usize, bool>>>,
-    pub destination_list:Arc<Mutex<VecDeque<usize>>>,
-    pub state_transmitter: Sender<ElevatorState>,
+    pub destination_list: Arc<Mutex<VecDeque<usize>>>,
+    
+    pub state_transmitter: Sender<ElevatorState>, /* used to send state to central controller */
+
+    is_busy: Arc<Mutex<bool>>,
 }
 
 impl ElevatorController {
+    pub fn new(id: usize, state_tx: Sender<ElevatorState>) -> Self {
+        return ElevatorController {
+            state: ElevatorState::new(id),
+            destination_map: Arc::new(Mutex::new(HashMap::new())),
+            destination_list: Arc::new(Mutex::new(VecDeque::new())),
+            state_transmitter: state_tx,
+            is_busy: Arc::new(Mutex::new(false)),
+        };
+    }
+
+    /* Receive a channel receiver and listen to each request made by central controller */
     pub async fn listen_request(&self, signal_receiver: Receiver<usize>) {
         let mut bind = signal_receiver;
+
         loop {
-            match bind.recv().await{
-                Ok(signal)=> {
-                    println!("new request for {}, to go to {}", self.elevator_id, signal);
-                    let destinations =  self.destination_map.lock().await;
-                    let in_destination_list = destinations.get(&signal);
+            match bind.recv().await {
+                Ok(requested_floor) => {
+                    /* drop request as already in request queue */
+                    let mut destination_map = self.destination_map.lock().await;
+                    let in_destination_list = destination_map.get(&requested_floor);
                     match in_destination_list {
                         Some(_) => {
                             continue;
-                        },
-                        None => {
-                            println!("already in destination");
+                        }
+                        None => {}
+                    }
+
+                    /* append the request to the queue */
+                    let mut destination_list = self.destination_list.lock().await;
+                    destination_list.push_front(requested_floor);
+                    destination_map.insert(requested_floor, true);
+
+                    /* if busy just append the requested floor */
+                    /* will be processed soon */
+                    let mut busy = self.is_busy.lock().await;
+                    if *busy {
+                        continue;
+                    }
+
+                    *busy = true;
+                    drop(busy);
+                    drop(destination_list);
+                    drop(destination_map);
+
+                    /* if not busy, process this request */
+                    /* and while there's a queued request (probably by another thread), keep going */
+                    loop {
+                        let mut destination_list = self.destination_list.lock().await;
+                        if destination_list.len() == 0 {
+                            break;
+                        }
+
+                        let next = destination_list.pop_back();
+                        drop(destination_list);
+
+                        match next {
+                            Some(n) => {
+                                let _ = self.go_to_floor(n).await;
+
+
+                                /* remove from destination map */
+                                let mut destination_map = self.destination_map.lock().await;
+                                destination_map.remove(&n);
+                            }
+                            None => {}
                         }
                     }
 
-                    let _ = self.destination_list.lock().await.push_front(signal);
-                },
+                    let mut busy = self.is_busy.lock().await;
+                    *busy = false
+                }
                 Err(e) => {
-                    print!("error receiving signal {}", e )
+                    print!("error receiving signal {}", e)
                 }
             }
         }
-    }
-
-    pub async fn serve(&self) {
-        loop {
-            sleep(time::Duration::from_millis(100));
-            let next =  self.destination_list.lock().await.pop_back();
-            match next {
-                Some(floor) => {
-                    let _ = self.go_to_floor(floor).await;
-                },
-                None => {
-
-                }
-            }
-        }   
     }
 }
 
 impl ElevatorControllerI for ElevatorController {
     async fn go_to_floor(&self, destination: usize) -> Result<(), Error> {
-        let mut elevator = self.elevator.lock().await;
+        let mut elevator = self.state.clone();
 
-        _ = elevator.close_door().await;
-        let previous_direction = elevator.direction.clone();
+        if destination == elevator.current_floor {
+            let _ = elevator.open_door();
+            return Ok(())
+        }
+
+        elevator.initial_direction = elevator.direction.clone();
 
         if destination > elevator.current_floor {
             elevator.direction = "up".to_string()
@@ -75,61 +127,55 @@ impl ElevatorControllerI for ElevatorController {
         let current_floor = elevator.current_floor;
 
         for i in current_floor + 1..destination + 1 {
+            /* artificial delay, mimick a moving elevator */
+            sleep(time::Duration::from_secs(1));
             elevator.current_floor = i;
-            let ok = self.state_transmitter.send(
-                ElevatorState {
-                    id: elevator.id,
-                    current_load: elevator.current_load,
-                    current_floor: elevator.current_floor,
-                    direction:elevator.direction.clone(),
-                    initial_direction: previous_direction.clone(),
-                }
-            );
 
+            /* send the state after movement */
+            let ok = self.state_transmitter.send(elevator.clone());
             tokio::task::yield_now().await;
 
             match ok {
-                Ok(no) => {
-                    // println!("{} moving to {} : now at {} published: received by {}", elevator.id, destination, elevator.current_floor, no);
-                },
+                Ok(_) => {
+
+                }
                 Err(e) => {
-                    println!("got error on publishing elevator state {} {}", elevator.id, e);
+                    println!(
+                        "got error on publishing elevator state {} {}",
+                        elevator.id, e
+                    );
                 }
             }
-            sleep(time::Duration::from_secs(1));
+
+
+            elevator.initial_direction = elevator.direction.clone();
         }
 
-        // self.destination_map.remove(&elevator.current_floor);
-        elevator.is_moving = false;
-        _ = elevator.open_door().await;
-
-        // wait for 3 seconds before closing door
+        /* open and close the door */
+        _ = elevator.open_door();
         sleep(time::Duration::from_secs(3));
-        _ = elevator.close_door().await;
+        _ = elevator.close_door();
 
+        /* elevator becomes idle? */
         if self.destination_list.lock().await.len() == 0 as usize {
-            let ok = self.state_transmitter.send(
-                ElevatorState {
-                    id: elevator.id,
-                    current_load: elevator.current_load,
-                    direction:"idle".to_string(),
-                    current_floor: elevator.current_floor,
-                    initial_direction:elevator.direction.clone(),
-                }
-            );
+            elevator.direction = "idle".to_string();
+            elevator.is_moving = false;
 
+            /* send the state after idle */
+            let ok = self.state_transmitter.send(elevator.clone());
             tokio::task::yield_now().await;
 
             match ok {
-                Ok(no) => {
-                    // println!("{} moving to {} : now at {} published: received by {}", elevator.id, destination, elevator.current_floor, no);
-                },
+                Ok(_) => {
+
+                }
                 Err(e) => {
-                    println!("got error on publishing elevator state {} {}", elevator.id, e);
+                    println!(
+                        "got error on publishing elevator state {} {}",
+                        elevator.id, e
+                    );
                 }
             }
-        } else {
-            
         }
 
         Ok(())
