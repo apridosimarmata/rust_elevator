@@ -16,7 +16,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct ElevatorController {
-    pub state: ElevatorState,
+    pub state: Arc<Mutex<ElevatorState>>,
 
     pub destination_map: Arc<Mutex<HashMap<usize, bool>>>,
     pub destination_list: Arc<Mutex<VecDeque<usize>>>,
@@ -29,7 +29,7 @@ pub struct ElevatorController {
 impl ElevatorController {
     pub fn new(id: usize, state_tx: Sender<ElevatorState>) -> Self {
         return ElevatorController {
-            state: ElevatorState::new(id),
+            state: Arc::new(Mutex::new(ElevatorState::new(id))),
             destination_map: Arc::new(Mutex::new(HashMap::new())),
             destination_list: Arc::new(Mutex::new(VecDeque::new())),
             state_transmitter: state_tx,
@@ -108,7 +108,7 @@ impl ElevatorController {
 
 impl ElevatorControllerI for ElevatorController {
     async fn go_to_floor(&self, destination: usize) -> Result<(), Error> {
-        let mut elevator = self.state.clone();
+        let mut elevator = self.state.lock().await;
 
         if destination == elevator.current_floor {
             let _ = elevator.open_door();
@@ -124,12 +124,12 @@ impl ElevatorControllerI for ElevatorController {
         }
 
         elevator.is_moving = true;
-        let current_floor = elevator.current_floor;
 
-        for i in current_floor + 1..destination + 1 {
+        let mut current_floor =  elevator.current_floor;
+        loop {
             /* artificial delay, mimick a moving elevator */
             sleep(time::Duration::from_secs(1));
-            elevator.current_floor = i;
+            elevator.current_floor = current_floor;
 
             /* send the state after movement */
             let ok = self.state_transmitter.send(elevator.clone());
@@ -147,8 +147,19 @@ impl ElevatorControllerI for ElevatorController {
                 }
             }
 
-
             elevator.initial_direction = elevator.direction.clone();
+
+            if current_floor == destination {
+                println!("Elevator {} arrived at destination {}", elevator.id, destination);
+                break
+            }
+
+            /* decide where to go next */
+            if elevator.direction == "up".to_string() {
+                current_floor = current_floor + 1;
+            }else if elevator.direction == "down".to_string(){
+                current_floor = current_floor - 1;
+            }
         }
 
         /* open and close the door */

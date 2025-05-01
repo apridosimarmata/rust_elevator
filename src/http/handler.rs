@@ -14,7 +14,7 @@ pub struct ElevatorHTTPHandLerImpl {
 }
 
 pub trait ElevatorHTTPHandler {
-    async fn get_elevator(&self) ->impl Responder;
+    async fn get_elevator(&self, requested_floor : usize) ->impl Responder;
     async fn listen_state(&self, tx : &Sender< Result<Event, Infallible>>);
 }
 
@@ -28,15 +28,15 @@ pub fn register_job_routes(router_config: &mut ServiceConfig, elevator_controlle
        .service(
             web::scope("/api/v1") 
             .route("/elevator/stream", web::get().to(|data: web::Data<ElevatorHTTPHandLerImpl>| async move {
-                println!("hah?");
                 let (tx, rx) : (Sender<Result<Event, Infallible>>, Receiver<Result<Event, Infallible>>) = channel(10);
 
                 data.listen_state(&tx).await;
                 let data_stream: ReceiverStream<Result<Event, Infallible>> = ReceiverStream::new(rx);
                 return sse::Sse::from_stream(data_stream).with_keep_alive(Duration::from_secs(5))
             }))
-            .route("/elevator", web::get().to(|data: web::Data<ElevatorHTTPHandLerImpl>| async move {
-                    let y = data.get_elevator().await;
+            .route("/elevator/{elevator_id}", web::get().to(|data: web::Data<ElevatorHTTPHandLerImpl>, path: web::Path<i32>| async move {
+                    let requested_floor = path.into_inner() as usize;
+                    let y = data.get_elevator(requested_floor).await;
 
                     HTTPResponder::Ok(())
                 })),
@@ -48,11 +48,11 @@ impl ElevatorHTTPHandLerImpl {
 }
 
 impl ElevatorHTTPHandler for ElevatorHTTPHandLerImpl {
-    async fn get_elevator (&self) ->  impl Responder{
+    async fn get_elevator (&self, requested_floor : usize) ->  impl Responder{
         let bind = self.central_elevator_controller.clone();
 
         tokio::spawn(async move {
-            let _ = bind.call_for_an_elevator(2, "up".to_string()).await;
+            let _ = bind.call_for_an_elevator(requested_floor, "up".to_string()).await;
         });
 
         HTTPResponder::Ok(())
