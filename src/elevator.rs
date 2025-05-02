@@ -1,5 +1,5 @@
-use core::time;
-use std::{fmt::Error, thread::sleep};
+use tokio::time::{sleep, Duration};
+use std::fmt::Error;
 
 
 use serde::{Deserialize, Serialize};
@@ -39,14 +39,14 @@ impl ElevatorState {
 
 
 impl ElevatorI for ElevatorState {
-     fn close_door(&mut self) -> Result<(), Error> {
-        sleep(time::Duration::from_secs(1));
+     async fn close_door(&mut self) -> Result<(), Error> {
+        sleep(Duration::from_secs(1)).await;
         self.is_door_open = false;
         Ok(())
     }
     
-     fn open_door(&mut self) -> Result<(), Error> {
-        sleep(time::Duration::from_secs(1));
+    async fn open_door(&mut self) -> Result<(), Error> {
+        sleep(Duration::from_secs(1)).await;
         self.is_door_open = true;
         Ok(())
     }

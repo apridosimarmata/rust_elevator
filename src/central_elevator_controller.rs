@@ -1,6 +1,6 @@
 use std::thread::sleep;
 use std::time::{self};
-use std::{collections::HashMap, fmt::Error, sync::Arc};
+use std::{collections::HashMap, fmt::Error, sync::{Arc}};
 
 use crate::elevator::ElevatorState;
 use crate::elevator_controller::ElevatorController;
@@ -36,9 +36,13 @@ impl CentralElevatorController {
             match bind.recv().await {
                 Ok(state) => {
                     // let mut elevator_controller: Option<ElevatorController> = None;
-                    println!("STATE: {} floor {}", state.id, state.current_floor);
+                    println!("STATE: {} floor {} from {} to {}", state.id, state.current_floor, state.initial_direction, state.direction);
 
                     let _ = self.global_state_tx.send(state.clone());
+
+                    if state.direction.as_str() == state.initial_direction.as_str() {
+                        continue;
+                    }
 
                     /* adjust elevator state */
                     match state.direction.as_str() {
@@ -47,31 +51,28 @@ impl CentralElevatorController {
                         },
                         "down" => {
                             let _ = self.moving_down_elevators.lock().await.insert_elevator(state.clone()).await;
-
                         },
                         "idle" => {
+                            println!("inserted to idle {}", state.id);
                             let _ = self.idle_elevators.lock().await.insert_elevator(state.clone()).await;
                         },
                         &_ =>{}
                     }
 
-                    /* an elevator becomes idle */
-                    match state.direction.as_str() == "idle" {
-                        true => {
-                            match state.initial_direction.as_str() {
-                                "up" => {
-                                    self.moving_up_elevators.lock().await.remove_elevator(state.id).await;
-                                },
-                                "down"=> {
-                                    self.moving_down_elevators.lock().await.remove_elevator(state.id).await;
-                                },
-                                &_ => {}
-                            }
+                    match state.initial_direction.as_str() {
+                        "up" => {
+                            let _ = self.moving_up_elevators.lock().await.remove_elevator(state.id).await;
                         },
-                        false => {
-
-                        }
+                        "down" => {
+                            let _ = self.moving_down_elevators.lock().await.remove_elevator(state.id).await;
+                        },
+                        "idle" => {
+                            println!("inserted to idle {}", state.id);
+                            let _ = self.idle_elevators.lock().await.remove_elevator(state.id).await;
+                        },
+                        &_ =>{}
                     }
+
                 }
                 Err(e) => {
                     println!("Failed to get elevator state");
@@ -152,6 +153,12 @@ impl CentralElevatorController {
 }
 
 impl CentralElevatorControllerI for CentralElevatorController {
+    async fn print_states(&self) {
+        println!("idle: {:?}", self.idle_elevators.lock().await.elevators.lock().await);
+        println!("up: {:?}", self.moving_up_elevators.lock().await.elevators.lock().await);
+        println!("down: {:?}", self.moving_down_elevators.lock().await.elevators.lock().await);
+    }
+
     async fn call_for_an_elevator(&self, floor: usize, direction: String) -> Result<(), Error> {
         let _ = self.permits.lock().await.acquire().await;
         let mut elevator: Option<ElevatorState> = None;
@@ -181,19 +188,6 @@ impl CentralElevatorControllerI for CentralElevatorController {
                 match signal_transmitter {
                     Some(tx) => {
                         let _ = tx.send(floor);
-                        match direction.as_str() {
-                            "up" => {
-                                let mut moving_up_elevators = self.moving_up_elevators.lock().await;
-                                let _ = moving_up_elevators.insert_elevator(e.clone()).await;
-                            },
-                            "down" => {
-                                let mut moving_down_elevators = self.moving_up_elevators.lock().await;
-                                let _ = moving_down_elevators.insert_elevator(e.clone()).await;
-                            },
-                            &_ =>{
-
-                            }
-                        }
                     }
                     None => {}
                 }

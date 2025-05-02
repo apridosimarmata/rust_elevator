@@ -3,8 +3,9 @@ use std::{
     collections::{HashMap, VecDeque},
     fmt::Error,
     sync::Arc,
-    thread::sleep,
 };
+
+use tokio::time::{sleep, Duration};
 
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::{Receiver, Sender};
@@ -128,13 +129,11 @@ impl ElevatorControllerI for ElevatorController {
         let mut current_floor =  elevator.current_floor;
         loop {
             /* artificial delay, mimick a moving elevator */
-            sleep(time::Duration::from_secs(1));
+            sleep(Duration::from_millis(1500)).await;
             elevator.current_floor = current_floor;
 
             /* send the state after movement */
             let ok = self.state_transmitter.send(elevator.clone());
-            tokio::task::yield_now().await;
-
             match ok {
                 Ok(_) => {
 
@@ -146,9 +145,9 @@ impl ElevatorControllerI for ElevatorController {
                     );
                 }
             }
+            tokio::task::yield_now().await;
 
             elevator.initial_direction = elevator.direction.clone();
-
             if current_floor == destination {
                 println!("Elevator {} arrived at destination {}", elevator.id, destination);
                 break
@@ -162,13 +161,16 @@ impl ElevatorControllerI for ElevatorController {
             }
         }
 
+        tokio::task::yield_now().await;
+
         /* open and close the door */
-        _ = elevator.open_door();
-        sleep(time::Duration::from_secs(3));
-        _ = elevator.close_door();
+        _ = elevator.open_door().await;
+        sleep(Duration::from_secs(3)).await;
+        _ = elevator.close_door().await;
 
         /* elevator becomes idle? */
         if self.destination_list.lock().await.len() == 0 as usize {
+            println!("Elevator becomes idle: {}", elevator.id);
             elevator.direction = "idle".to_string();
             elevator.is_moving = false;
 

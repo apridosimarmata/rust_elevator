@@ -37,7 +37,7 @@ async fn main() -> std::io::Result<()> {
         .configure(|cfg| register_job_routes(cfg, elevator_controller.clone(),rx_bind.clone()))
         .route("/", web::get().to(index))
     })
-    .bind("0.0.0.0:8080")?
+    .bind("0.0.0.0:3000")?
     .run()
     .await
 

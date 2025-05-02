@@ -32,9 +32,6 @@ impl ElevatorPool for ElevatorHeap {
         }
     }
     
-    async fn get_elevator_id(&mut self) -> Option<usize> {
-        todo!()
-    }
     
     async fn get_elevator(&mut self) -> Option<crate::elevator::ElevatorState> {
         todo!()

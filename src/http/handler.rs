@@ -16,6 +16,7 @@ pub struct ElevatorHTTPHandLerImpl {
 pub trait ElevatorHTTPHandler {
     async fn get_elevator(&self, requested_floor : usize) ->impl Responder;
     async fn listen_state(&self, tx : &Sender< Result<Event, Infallible>>);
+    async fn print_elevator_state(&self) -> impl Responder;
 }
 
 pub fn register_job_routes(router_config: &mut ServiceConfig, elevator_controller:  Arc<CentralElevatorController>, global_state_rx: Arc<BroadcastReceiver<ElevatorState>>) {
@@ -33,6 +34,11 @@ pub fn register_job_routes(router_config: &mut ServiceConfig, elevator_controlle
                 data.listen_state(&tx).await;
                 let data_stream: ReceiverStream<Result<Event, Infallible>> = ReceiverStream::new(rx);
                 return sse::Sse::from_stream(data_stream).with_keep_alive(Duration::from_secs(5))
+            }))
+            .route("/elevator/state", web::get().to(|data: web::Data<ElevatorHTTPHandLerImpl>| async move {
+                let y = data.print_elevator_state().await;
+
+                HTTPResponder::Ok(())
             }))
             .route("/elevator/{elevator_id}", web::get().to(|data: web::Data<ElevatorHTTPHandLerImpl>, path: web::Path<i32>| async move {
                     let requested_floor = path.into_inner() as usize;
@@ -89,6 +95,16 @@ impl ElevatorHTTPHandler for ElevatorHTTPHandLerImpl {
             }
         });
         
+    }
+    
+    async fn print_elevator_state(&self) -> impl Responder {
+        let bind = self.central_elevator_controller.clone();
+
+        tokio::spawn(async move {
+            let _ = bind.print_states().await;
+        });
+
+        HTTPResponder::Ok(())
     }
 }
 

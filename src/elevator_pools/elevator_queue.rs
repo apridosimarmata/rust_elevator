@@ -1,41 +1,25 @@
-use std::{collections::HashMap, sync::Arc};
-
-use futures::lock::Mutex;
-
+use std::{collections::{HashMap, VecDeque}, sync::{Arc}};
 use crate::{elevator::ElevatorState, interfaces::ElevatorPool};
-
 use super::elevator_heap::MyError;
+use tokio::sync::Mutex;
 
 #[derive(Debug)]
 pub struct ElevatorQueue {
-    pub elevators: Arc<Mutex<Vec<ElevatorState>>>,
+    pub elevators: Arc<Mutex<VecDeque<ElevatorState>>>,
     pub elevators_index: Mutex<HashMap<usize, usize>>, // used to find an elevator quickly, or an elevator exists
 }
 
 impl ElevatorPool for ElevatorQueue  {
-    async fn get_elevator_id(&mut self) -> Option<usize>{
-        let elevators = self.elevators.lock().await;
-
-        match elevators.last() {
-            Some(e) => {
-                return Some(e.id)
-            },
-            None => {
-                return None;
-            }
-        }
-    }
-
     fn new() -> Self {
         ElevatorQueue {
-            elevators: Arc::new(Mutex::new(Vec::new())),
+            elevators: Arc::new(Mutex::new(VecDeque::new())),
             elevators_index: Mutex::new(HashMap::new())
         }
     }
 
     async fn get_elevator(&mut self) -> Option<ElevatorState> {
         let mut elevators =  self.elevators.lock().await;
-        let elevator =  elevators.pop();
+        let elevator =  elevators.pop_back();
 
         match elevator {
             Some(e) => {
@@ -45,54 +29,53 @@ impl ElevatorPool for ElevatorQueue  {
                 return Some(e);
             },
             None => {
-
+                return None;
             }
         }
-
-        return None;
     }
 
     async fn insert_elevator(&mut self, elevator: ElevatorState) -> Result<(), MyError> {
         let mut elevator_index = self.elevators_index.lock().await;
 
         match elevator_index.get(&elevator.id) {
-            Some(e) => {
+            Some(_) => {
                 return Ok(()) // no need to insert
             },
             None => {
+                let mut elevators= self.elevators.lock().await;
+                elevator_index.insert(elevator.id, 0);
+                elevators.push_front(elevator);
+        
+                Ok(())
             }
         }  
 
-        let mut elevators= self.elevators.lock().await;
-        let length  = elevators.len();
 
-        elevators.insert(length, elevator);
-        elevator_index.insert(length, 0);
-
-
-        Ok(())
     }
 
     async fn remove_elevator(&mut self, elevator_id: usize) -> Option<ElevatorState> {
         let mut elevators =  self.elevators.lock().await;
+        let mut elevator_index = self.elevators_index.lock().await;
 
+        match elevator_index.get(&elevator_id) {
+            Some(e) => {
+                let index = *e;
 
-        let mut elevator: Option<ElevatorState> = None;
-
-        for e in elevators.clone().iter().enumerate() {
-            if  e.1.id == elevator_id {
-                let bind =  e.1.clone();
-                elevator = Some(bind);
-                elevators.remove(e.0);
-
-                let mut elevator_index = self.elevators_index.lock().await;
-                elevator_index.remove(&e.1.id);
-                
-                break;
+                elevator_index.remove(&elevator_id);
+                match elevators.remove(index){
+                    Some(e) => {
+                        return Some(e)
+                    },
+                    None => {
+                        return None;
+                    }
+                }
+            },
+            None => {
+                return None
             }
-        }
+        }  
 
-        return elevator
     }
 
     async fn len(&self) -> usize {
