@@ -1,4 +1,3 @@
-use core::time;
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Error,
@@ -60,8 +59,7 @@ impl ElevatorController {
                     destination_list.push_front(requested_floor);
                     destination_map.insert(requested_floor, true);
 
-                    /* if busy just append the requested floor */
-                    /* will be processed soon */
+                    /* if busy, quit. will be processed soon */
                     let mut busy = self.is_busy.lock().await;
                     if *busy {
                         continue;
@@ -86,7 +84,6 @@ impl ElevatorController {
                         match next {
                             Some(n) => {
                                 let _ = self.go_to_floor(n).await;
-
 
                                 /* remove from destination map */
                                 let mut destination_map = self.destination_map.lock().await;
@@ -162,17 +159,21 @@ impl ElevatorControllerI for ElevatorController {
         }
 
         tokio::task::yield_now().await;
+        elevator.is_moving = false;
 
         /* open and close the door */
         _ = elevator.open_door().await;
-        sleep(Duration::from_secs(3)).await;
+
+        let _ = self.state_transmitter.send(elevator.clone());
+        tokio::task::yield_now().await;
+
+        sleep(Duration::from_secs(5)).await;
         _ = elevator.close_door().await;
 
         /* elevator becomes idle? */
         if self.destination_list.lock().await.len() == 0 as usize {
             println!("Elevator becomes idle: {}", elevator.id);
             elevator.direction = "idle".to_string();
-            elevator.is_moving = false;
 
             /* send the state after idle */
             let ok = self.state_transmitter.send(elevator.clone());

@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, VecDeque}, sync::{Arc}};
+use std::{collections::{HashMap, VecDeque}, sync::Arc};
 use crate::{elevator::ElevatorState, interfaces::ElevatorPool};
 use super::elevator_heap::MyError;
 use tokio::sync::Mutex;
@@ -39,7 +39,7 @@ impl ElevatorPool for ElevatorQueue  {
 
         match elevator_index.get(&elevator.id) {
             Some(_) => {
-                return Ok(()) // no need to insert
+                return Ok(())
             },
             None => {
                 let mut elevators= self.elevators.lock().await;

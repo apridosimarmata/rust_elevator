@@ -1,16 +1,26 @@
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
 use actix_web::{web::{self, ServiceConfig}, HttpResponse, Responder};
 use actix_web_lab::sse::{self, Event};
+use futures::lock::Mutex;
 use tokio::sync::{broadcast::Receiver as BroadcastReceiver, mpsc::{Sender, Receiver, channel}};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{central_elevator_controller::CentralElevatorController, elevator::ElevatorState, interfaces::CentralElevatorControllerI};
 
-pub struct ElevatorHTTPHandLerImpl {
+
+struct Visitor {
+    elevator: Option<usize>,
+    floor: Option<usize>,
+
+    id: String, 
+}
+
+pub struct ElevatorHTTPHandlerImpl {
     central_elevator_controller: Arc<CentralElevatorController>,
-    global_state_rx: Arc<BroadcastReceiver<ElevatorState>>
+    global_state_rx: Arc<BroadcastReceiver<ElevatorState>>,
+    visitors: Mutex<HashMap<String, Visitor>>
 }
 
 pub trait ElevatorHTTPHandler {
@@ -20,40 +30,41 @@ pub trait ElevatorHTTPHandler {
 }
 
 pub fn register_job_routes(router_config: &mut ServiceConfig, elevator_controller:  Arc<CentralElevatorController>, global_state_rx: Arc<BroadcastReceiver<ElevatorState>>) {
-    let job_http_handler = ElevatorHTTPHandLerImpl {
+    let job_http_handler = ElevatorHTTPHandlerImpl {
         central_elevator_controller: elevator_controller,
         global_state_rx:global_state_rx,
+        visitors: Mutex::new(HashMap::new())
     };
 
     router_config.app_data(web::Data::new(job_http_handler))
        .service(
             web::scope("/api/v1") 
-            .route("/elevator/stream", web::get().to(|data: web::Data<ElevatorHTTPHandLerImpl>| async move {
+            .route("/elevator/stream", web::get().to(|data: web::Data<ElevatorHTTPHandlerImpl>| async move {
                 let (tx, rx) : (Sender<Result<Event, Infallible>>, Receiver<Result<Event, Infallible>>) = channel(10);
 
                 data.listen_state(&tx).await;
                 let data_stream: ReceiverStream<Result<Event, Infallible>> = ReceiverStream::new(rx);
                 return sse::Sse::from_stream(data_stream).with_keep_alive(Duration::from_secs(5))
             }))
-            .route("/elevator/state", web::get().to(|data: web::Data<ElevatorHTTPHandLerImpl>| async move {
-                let y = data.print_elevator_state().await;
+            .route("/elevator/state", web::get().to(|data: web::Data<ElevatorHTTPHandlerImpl>| async move {
+                let _ = data.print_elevator_state().await;
 
                 HTTPResponder::Ok(())
             }))
-            .route("/elevator/{elevator_id}", web::get().to(|data: web::Data<ElevatorHTTPHandLerImpl>, path: web::Path<i32>| async move {
+            .route("/elevator/{elevator_id}", web::get().to(|data: web::Data<ElevatorHTTPHandlerImpl>, path: web::Path<i32>| async move {
                     let requested_floor = path.into_inner() as usize;
-                    let y = data.get_elevator(requested_floor).await;
+                    let _ = data.get_elevator(requested_floor).await;
 
                     HTTPResponder::Ok(())
                 })),
         );
 }
 
-impl ElevatorHTTPHandLerImpl {
+impl ElevatorHTTPHandlerImpl {
 
 }
 
-impl ElevatorHTTPHandler for ElevatorHTTPHandLerImpl {
+impl ElevatorHTTPHandler for ElevatorHTTPHandlerImpl {
     async fn get_elevator (&self, requested_floor : usize) ->  impl Responder{
         let bind = self.central_elevator_controller.clone();
 

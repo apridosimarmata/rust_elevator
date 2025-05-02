@@ -1,6 +1,6 @@
 use std::thread::sleep;
 use std::time::{self};
-use std::{collections::HashMap, fmt::Error, sync::{Arc}};
+use std::{collections::HashMap, fmt::Error, sync::Arc};
 
 use crate::elevator::ElevatorState;
 use crate::elevator_controller::ElevatorController;
@@ -16,14 +16,10 @@ use tokio::sync::broadcast::{Receiver, channel};
 /* 2. Storing their state based on their respective state */
 #[derive(Debug)]
 pub struct CentralElevatorController {
-    
     moving_up_elevators: Mutex<ElevatorQueue>,
     moving_down_elevators: Mutex<ElevatorQueue>,
     idle_elevators: Mutex<ElevatorQueue>,
-
-
     signal_transmitter: HashMap<usize, Sender<usize>>,
-    elevators: HashMap<usize, Mutex<ElevatorController>>,
     permits: Mutex<Semaphore>,
     global_state_tx: Sender<ElevatorState>
 }
@@ -74,7 +70,7 @@ impl CentralElevatorController {
                     }
 
                 }
-                Err(e) => {
+                Err(_) => {
                     println!("Failed to get elevator state");
                 }
             }
@@ -83,10 +79,9 @@ impl CentralElevatorController {
         }
     }
 
-    pub async fn new(global_state_tx : Sender<ElevatorState>) -> Arc<CentralElevatorController> {
+    pub async fn new(global_state_tx : Sender<ElevatorState>, no_of_elevator: usize) -> Arc<CentralElevatorController> {
         /* Elevator containers */
         let mut idle_elevators = ElevatorQueue::new();
-        let mut elevator_controllers: HashMap<usize, Mutex<ElevatorController>> = HashMap::new();
 
         let mut signal_transmitter: HashMap<usize, Sender<usize>> = HashMap::new();
         let mut state_receivers: Vec<Receiver<ElevatorState>> = Vec::new();
@@ -94,25 +89,20 @@ impl CentralElevatorController {
         let mut permits_size:usize = 0;
 
         /* Building elevators */
-        for i in 0..2 {
+        for i in 0..no_of_elevator {
             let (state_tx, state_rx): (Sender<ElevatorState>, Receiver<ElevatorState>) = channel(1);
-
             state_receivers.insert(i, state_rx);
 
             let (signal_tx, signal_rx): (Sender<usize>, Receiver<usize>) = channel(10);
             signal_transmitter.insert(i, signal_tx);
 
-            /* Put the elevator to idles elevator */
-            let elevator_controller = ElevatorController::new(i, state_tx);
-
             /* Runner for receiving requests from central controller */
-            let elevator_request_listener_bind = elevator_controller.clone();
             tokio::spawn(async move {
-                elevator_request_listener_bind.listen_request(signal_rx).await;
+                let elevator_controller = ElevatorController::new(i, state_tx);
+                elevator_controller.listen_request(signal_rx).await;
             });
 
-            elevator_controllers.insert(i, Mutex::new(elevator_controller));
-
+            /* Put the elevator to idles elevator */
             let _ = idle_elevators
                 .insert_elevator(ElevatorState {
                     id: i,
@@ -124,7 +114,6 @@ impl CentralElevatorController {
                     is_moving: false,
                 })
                 .await;
-            // idle_elevators.elevators_index.lock().await.insert(i, i);
 
             permits_size +=1;
         }
@@ -135,7 +124,6 @@ impl CentralElevatorController {
             moving_up_elevators: Mutex::new(ElevatorQueue::new()),
             idle_elevators: Mutex::new(idle_elevators),
             signal_transmitter: signal_transmitter,
-            elevators: elevator_controllers,
             permits: Mutex::new(Semaphore::new(permits_size)),
             global_state_tx: global_state_tx
         });
