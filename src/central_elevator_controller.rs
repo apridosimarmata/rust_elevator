@@ -11,16 +11,22 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::sync::broadcast::Sender;
 use tokio::sync::broadcast::{Receiver, channel};
 
+#[derive(Clone)]
+pub struct ElevatorRequest {
+    pub from: usize,
+    pub to: usize,
+}
+
 /* Elevator controller */
 /* 1. Hold all the elevator controllers */
-/* 2. Storing their state based on their respective state */
+/* 2. Stores elevators based on their respective state */
 #[derive(Debug)]
 pub struct CentralElevatorController {
     moving_up_elevators: Mutex<ElevatorQueue>,
     moving_down_elevators: Mutex<ElevatorQueue>,
     idle_elevators: Mutex<ElevatorQueue>,
-    signal_transmitter: HashMap<usize, Sender<usize>>,
     permits: Mutex<Semaphore>,
+    signal_transmitter: HashMap<usize, Sender<ElevatorRequest>>,
     global_state_tx: Sender<ElevatorState>
 }
 
@@ -36,7 +42,7 @@ impl CentralElevatorController {
 
                     let _ = self.global_state_tx.send(state.clone());
 
-                    if state.direction.as_str() == state.initial_direction.as_str() {
+                    if state.direction.as_str() == state.initial_direction.as_str() && state.direction.as_str() != "idle" {
                         continue;
                     }
 
@@ -83,7 +89,7 @@ impl CentralElevatorController {
         /* Elevator containers */
         let mut idle_elevators = ElevatorQueue::new();
 
-        let mut signal_transmitter: HashMap<usize, Sender<usize>> = HashMap::new();
+        let mut signal_transmitter: HashMap<usize, Sender<ElevatorRequest>> = HashMap::new();
         let mut state_receivers: Vec<Receiver<ElevatorState>> = Vec::new();
 
         let mut permits_size:usize = 0;
@@ -93,7 +99,7 @@ impl CentralElevatorController {
             let (state_tx, state_rx): (Sender<ElevatorState>, Receiver<ElevatorState>) = channel(1);
             state_receivers.insert(i, state_rx);
 
-            let (signal_tx, signal_rx): (Sender<usize>, Receiver<usize>) = channel(10);
+            let (signal_tx, signal_rx): (Sender<ElevatorRequest>, Receiver<ElevatorRequest>) = channel(10);
             signal_transmitter.insert(i, signal_tx);
 
             /* Runner for receiving requests from central controller */
@@ -147,9 +153,14 @@ impl CentralElevatorControllerI for CentralElevatorController {
         println!("down: {:?}", self.moving_down_elevators.lock().await.elevators.lock().await);
     }
 
-    async fn call_for_an_elevator(&self, floor: usize, direction: String) -> Result<(), Error> {
+    async fn call_for_an_elevator(&self, floor: usize, destination: usize) -> Result<usize, Error> {
         let _ = self.permits.lock().await.acquire().await;
         let mut elevator: Option<ElevatorState> = None;
+
+        let mut direction = "up".to_string();
+        if floor > destination {
+            direction = "down".to_string();
+        }
 
         /* Check if any idle elevator available */
         let mut idle_elevators = self.idle_elevators.lock().await;
@@ -169,15 +180,21 @@ impl CentralElevatorControllerI for CentralElevatorController {
             elevator = moving_down_elevators.get_elevator().await;
         }
 
-        match elevator {
+        match elevator.clone() {
             Some(e) => {
                 /* send request to elevator */
                 let signal_transmitter = self.signal_transmitter.get(&e.id);
                 match signal_transmitter {
                     Some(tx) => {
-                        let _ = tx.send(floor);
+                        let _ = tx.send(ElevatorRequest{
+                            from: floor,
+                            to: destination,
+                        });
+                        return Ok(e.id);
                     }
-                    None => {}
+                    None => {
+                        return Ok(123 as usize);
+                    }
                 }
             }
             None => {
@@ -185,6 +202,6 @@ impl CentralElevatorControllerI for CentralElevatorController {
             }
         }
 
-        Ok(())
+        Ok(123 as usize)
     }
 }

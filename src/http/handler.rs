@@ -1,6 +1,6 @@
-use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration, usize};
 
-use actix_web::{web::{self, ServiceConfig}, HttpResponse, Responder};
+use actix_web::{web::{self, ServiceConfig}, HttpRequest, HttpResponse, Responder};
 use actix_web_lab::sse::{self, Event};
 use futures::lock::Mutex;
 use tokio::sync::{broadcast::Receiver as BroadcastReceiver, mpsc::{Sender, Receiver, channel}};
@@ -20,11 +20,12 @@ struct Visitor {
 pub struct ElevatorHTTPHandlerImpl {
     central_elevator_controller: Arc<CentralElevatorController>,
     global_state_rx: Arc<BroadcastReceiver<ElevatorState>>,
-    visitors: Mutex<HashMap<String, Visitor>>
+    visitors: Mutex<HashMap<String, Mutex<Visitor>>>,
+    elevator_passenger: Mutex<HashMap<usize, Mutex<HashMap<String, bool>>>>
 }
 
 pub trait ElevatorHTTPHandler {
-    async fn get_elevator(&self, requested_floor : usize) ->impl Responder;
+    async fn get_elevator(&self, from : usize, destination : usize) -> usize;
     async fn listen_state(&self, tx : &Sender< Result<Event, Infallible>>);
     async fn print_elevator_state(&self) -> impl Responder;
 }
@@ -33,7 +34,8 @@ pub fn register_job_routes(router_config: &mut ServiceConfig, elevator_controlle
     let job_http_handler = ElevatorHTTPHandlerImpl {
         central_elevator_controller: elevator_controller,
         global_state_rx:global_state_rx,
-        visitors: Mutex::new(HashMap::new())
+        visitors: Mutex::new(HashMap::new()),
+        elevator_passenger: Mutex::new(HashMap::new())
     };
 
     router_config.app_data(web::Data::new(job_http_handler))
@@ -51,11 +53,37 @@ pub fn register_job_routes(router_config: &mut ServiceConfig, elevator_controlle
 
                 HTTPResponder::Ok(())
             }))
-            .route("/elevator/{elevator_id}", web::get().to(|data: web::Data<ElevatorHTTPHandlerImpl>, path: web::Path<i32>| async move {
-                    let requested_floor = path.into_inner() as usize;
-                    let _ = data.get_elevator(requested_floor).await;
+            .route("/elevator/{destination}", web::get().to(|data: web::Data<ElevatorHTTPHandlerImpl>, path: web::Path<i32>, req: HttpRequest| async move {
+                    let visitor_id = if let Some(cookie) = req.cookie("visitor_id") {
+                        cookie.value().to_string()
+                    } else {
+                        return HTTPResponder::Ok(())
+                    };
 
-                    HTTPResponder::Ok(())
+                    let mut elevator_id: usize = 123;
+
+                    let mut visitors = data.visitors.lock().await;
+                    let destination = path.into_inner() as usize;
+                    match visitors.get(&visitor_id.clone()) {
+                        Some(v) => {
+                            match v.lock().await.floor {
+                                Some(floor) => {
+                                    elevator_id = data.get_elevator(floor, destination).await;
+                                },
+                                None => {
+
+                                }
+                            }
+                        },
+                        None => {
+                            let visitor = Visitor { elevator: None, floor: Some(0), id: visitor_id.clone() };
+                            visitors.insert(visitor_id.clone(), Mutex::new(visitor));
+                            elevator_id = data.get_elevator(0, destination).await;
+                        }
+                    }
+
+
+                    HTTPResponder::OkWithElevatorId(elevator_id)
                 })),
         );
 }
@@ -65,14 +93,19 @@ impl ElevatorHTTPHandlerImpl {
 }
 
 impl ElevatorHTTPHandler for ElevatorHTTPHandlerImpl {
-    async fn get_elevator (&self, requested_floor : usize) ->  impl Responder{
-        let bind = self.central_elevator_controller.clone();
+    async fn get_elevator (&self,  from : usize, destination : usize) ->  usize{
+        let result = self.central_elevator_controller.call_for_an_elevator(from, destination).await;
 
-        tokio::spawn(async move {
-            let _ = bind.call_for_an_elevator(requested_floor, "up".to_string()).await;
-        });
+        match result {
+            Ok(id) => {
+                return id
+            },
+            Err(_) =>{
 
-        HTTPResponder::Ok(())
+            }
+        }
+
+        return 123
     }
     
     async fn listen_state(&self, tx : &Sender< Result<Event, Infallible>>) {
@@ -133,6 +166,7 @@ pub struct CustomHTTPError {
 #[derive(Serialize, Deserialize)]
 pub enum HTTPResponder<T: Serialize> {
     Ok(T),
+    OkWithElevatorId(usize),
     BadRequest(String),
     InternalServerError(String)
 }
@@ -144,7 +178,8 @@ impl<T: Serialize> Responder for HTTPResponder<T> {
         match self {
             HTTPResponder::Ok(data) => HttpResponse::Ok().json(CustomHTTPResponse { data }),
             HTTPResponder::BadRequest(msg) => HttpResponse::BadRequest().json(CustomHTTPError { error: msg }),
-            HTTPResponder::InternalServerError(msg) => HttpResponse::InternalServerError().json(CustomHTTPError {error: msg})
+            HTTPResponder::InternalServerError(msg) => HttpResponse::InternalServerError().json(CustomHTTPError {error: msg}),
+            HTTPResponder::OkWithElevatorId(data) =>  HttpResponse::Ok().json(CustomHTTPResponse { data }),
         }
     }
 }

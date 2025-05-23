@@ -6,19 +6,166 @@
         integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
 </head>
 
-<body style="max-width: 1200px;">
-    <div class="main-section">
+<body style="width: 100vw;">
+    <div class="container" id="container">
+        <div class="panel elevators" style="display: flex; width: 25%;">
+            <div class="elevator-line">
+                <div class="elevator" id="elevator-0">
+                    Elevator 1
+                </div>
+            </div>
+            <div class="elevator-line">
+                <div class="elevator" id="elevator-1">
+                    Elevator 2
+                </div>
+            </div>
+            <div class="elevator-line">
+                <div class="elevator" id="elevator-2">
+                    Elevator 3
+                </div>
+            </div>
 
+        </div>
+
+        <div class="panel floor-content"
+            style="border-left: 2px solid black;background-color: white; width: 55%;  display: flex; flex-direction: column; justify-items: center;">
+
+            <div class="pov-elevators">
+                <div class="pov-elevator">
+
+                </div>
+                <div class="pov-elevator">
+
+                </div>
+                <div class="pov-elevator">
+
+                </div>
+            </div>
+
+            <!-- <h1>§ About Me</h1>
+
+            <p>
+                I’m Imam Aprido Simarmata, a backend engineer with a strong foundation in Go and growing expertise in
+                Rust. I have hands-on experience building scalable e-commerce systems, working with technologies like
+                Redis, RabbitMQ, PostgreSQL, MongoDB, and federated GraphQL. I specialize in designing efficient
+                service-to-service communication and real-time solutions, using message brokers and Server-Sent Events
+                (SSE) to optimize distributed systems performance.
+            </p>
+
+            <p>
+                Beyond backend development, I’ve explored cybersecurity challenges, applying device fingerprinting with
+                machine learning (Naïve Bayes) to combat fake reviews. My projects range from building a food delivery
+                platform to implementing feature flagging with Growthbook and search optimization with Elasticsearch.
+                I’m committed to delivering clean, reliable systems and believe that good architecture must go hand in
+                hand with clear, effective team communication.
+            </p>
+
+            <p>
+                Currently, I’m expanding into embedded systems and IoT, combining my backend skills with Rust and Actix
+                Web to build robust services for connected devices. My focus is on bridging backend efficiency with
+                real-world hardware, especially for tourism-related applications. Outside of tech, I enjoy writing music
+                that reflects on themes like reflection, acceptance, and spiritual journey.
+            </p> -->
+
+
+        </div>
+
+        <div class="panel navigation" style="width: 20%;padding: 50px;border-left: 2px solid black;">
+            <h1>Navigation</h1>
+            <p>
+                <span onclick="gotoFloor(4)" class="navigation-item" id="navigation-5">&bull; 5th floor: His
+                    CV<br></span>
+                <span onclick="gotoFloor(3)" class="navigation-item" id="navigation-4">&bull; 4th floor: Design &
+                    architecture of this Elevator system<br></span>
+                <span onclick="gotoFloor(2)" class="navigation-item" id="navigation-3">&bull; 3rd floor: His
+                    professional experience<br></span>
+                <span onclick="gotoFloor(1)" class="navigation-item" id="navigation-2">&bull; 2nd floor: His first web
+                    app<br></span>
+                <span onclick="gotoFloor(0)" class="navigation-item green" id="navigation-1">&bull; 1st floor: About
+                    Aprido<br></span>
+
+                <span class="" style="font-size: 20px !important; font-weight: medium; font-style: italic;">&bull;
+                    Green: your position &bull; click a destination and an elevator will pick you up. &bull; All
+                    contents are only accessible by travelling with the elevator.</span>
+            </p>
+            <br>
+            <h1>This System</h1>
+            <p style="font-size: 20px !important;">
+                <span style="font-weight: bold;">&bull; Left panel:<br></span>
+                Where you can see each elevators movement and use one of them.<br>
+                <span style="font-weight: bold;">&bull; Middle panel:<br></span>
+                Where you can see the content of each floor.<br>
+                <span style="font-weight: bold;">&bull; Right panel:<br></span>
+                Where you can see the navigation and the elevator system description.<br>
+            </p>
+            <p style="font-size: 20px !important;">
+                Your request for an elevator being sent to a central elevator controller (inside the backend server),
+                which then determines which elevator going to pick you up - with basic FIFO. The selected elevator moves
+                to the requested floor, and the elevator's position is updated in real-time using Server-Sent Events
+                (SSE). This system is designed to efficiently handle multiple requests and optimize elevator usage.
+            </p>
+
+        </div>
     </div>
 </body>
 <footer>
     <script>
+        function gotoFloor(destination) {
+
+            $.ajax({
+                url: "/api/v1/elevator/"+destination,
+                type: 'GET',
+                xhrFields: {
+                    withCredentials: true
+                },
+                success: function (res) {
+                    console.log(res);
+
+                }
+            })
+
+        }
+        document.addEventListener('DOMContentLoaded', function () {
+            if (myElement) {
+                document.getElementById('elevator-1').style.position = 'relative';
+                document.getElementById('elevator-1').style.top = '0px';
+                document.getElementById('elevator-2').style.position = 'relative';
+                document.getElementById('elevator-2').style.top = '0px';
+                document.getElementById('elevator-0').style.position = 'relative';
+                document.getElementById('elevator-0').style.top = '0px';
+            } else {
+                console.error("container not found!");
+            }
+        });
+
+        function positionElementVertically(element, floor) {
+            const containerHeight = document.getElementsByClassName("elevator-line")[0].offsetHeight;
+            const yPositions = [
+                containerHeight * 0.1,
+                containerHeight * 0.3,
+                containerHeight * 0.5,
+                containerHeight * 0.7,
+                containerHeight * 0.9,
+            ];
+
+            const elementHeight = element.offsetHeight;
+
+            const targetYCenter = yPositions[floor];
+
+            const topPosition = targetYCenter - (elementHeight / 2);
+
+            element.style.position = 'relative';
+            element.style.transition = `top 4500ms linear`;
+            element.style.top = `${topPosition}px`;
+        }
+
         // Stream to the server
         const eventSource = new EventSource('/api/v1/elevator/stream');
 
         eventSource.onmessage = (event) => {
             let event_data = $.parseJSON(event.data);
-            console.log(event_data);
+            console.log(event_data)
+            positionElementVertically(document.getElementById('elevator-' + event_data.id), event_data.current_floor);
         };
         eventSource.onerror = (error) => {
             console.error('EventSource error:', error);
@@ -27,9 +174,134 @@
     </script>
 </footer>
 <style>
-    .main-section {
+    .pov-elevator {
+        background-color: white;
+        width: 250px;
+        height: 350px;
+        top: 30%;
+        position: relative;
+        aspect-ratio: 1/1;
+        border-radius: 10px;
+        border: 2px solid black;
+    }
+
+    .pov-elevators {
+        justify-content: space-evenly;
+        width: 100%;
+        height: 100%;
+        background-color: silver;
+        display: flex;
+        flex-direction: row;
+    }
+    .navigation-item {
+        color: blue;
+        text-decoration: underline;
+        cursor: pointer;
+    }
+
+    .green {
+        color: green !important;
+        text-decoration: none;
+        font-weight: bold;
+    }
+
+    .panel {
+        height: 100vh;
+    }
+
+    .elevator-outer-buttons {
         display: flex;
         flex-direction: column;
+        justify-content: space-around;
+        align-items: center;
+    }
+
+    .small-text {
+        font-size: 15px;
+        line-height: 1.5;
+        margin: 10px 0;
+        max-width: 70%;
+    }
+
+    .button {
+        width: 50px;
+        aspect-ratio: 1/1;
+        background-color: white;
+        border-radius: 100%;
+        border: 2px solid black;
+        padding: 10px;
+        margin: 20px;
+        text-align: center;
+    }
+
+    .elevator-pov {
+        background-color: white;
+        border: 2px solid black;
+        border-radius: 5px;
+        padding: 5px;
+        width: 210px;
+        aspect-ratio: 1/1.5;
+        height: 70px;
+        border-radius: 10px;
+        height: 100%;
+        margin: 0px 10px;
+    }
+
+    html,
+    body {
+        padding: 0;
+        /* Other html/body styles */
+    }
+
+    body {
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
+        /* Ensure body is at least viewport height */
+        margin: 0;
+        /* Remove default body margin */
+        overflow: hidden;
+    }
+
+    .elevators {
+        transform: scaleY(-1);
+    }
+
+    .elevator-line {
+        padding: 0px;
+        width: 33.3%;
+        border: 1px solid black;
+        max-height: 100%;
+    }
+
+    /* .position{
+        padding: 0px;
+        width: 1%;
+        border: 1px solid black;
+        min-height: 90%;
+    }
+
+    .position > #position-indicator {
+        background-color: green;
+        height: 19%;
+    } */
+
+    .elevator {
+        margin: 0;
+        background-color: silver;
+        border: 7px solid black;
+        border-radius: 5px;
+        max-width: 100%;
+        height: 19%;
+        transform: scaleY(-1);
+    }
+
+
+    .container {
+        display: flex;
+        flex-direction: row;
+        width: 100%;
+        min-height: 100%;
     }
 
     .job-form {
@@ -37,8 +309,28 @@
         flex-direction: row;
         justify-content: space-around;
     }
+
     tr {
         height: 30px;
+    }
+
+    p {
+        font-size: 23px;
+        line-height: 1.5;
+        margin: 10px 0;
+        max-width: 90%;
+    }
+
+    li {
+        font-size: 20px;
+        line-height: 1.5;
+        margin: 10px 0;
+        max-width: 90%;
+    }
+
+    h1 {
+        font-size: 30px;
+        margin: 20px 0;
     }
 </style>
 

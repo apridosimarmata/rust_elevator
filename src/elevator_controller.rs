@@ -4,12 +4,13 @@ use std::{
     sync::Arc,
 };
 
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::{Receiver, Sender};
 
 use crate::{
+    central_elevator_controller::ElevatorRequest,
     elevator::ElevatorState,
     interfaces::{ElevatorControllerI, ElevatorI},
 };
@@ -17,10 +18,8 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct ElevatorController {
     pub state: Arc<Mutex<ElevatorState>>,
-
     pub destination_map: Arc<Mutex<HashMap<usize, bool>>>,
     pub destination_list: Arc<Mutex<VecDeque<usize>>>,
-    
     pub state_transmitter: Sender<ElevatorState>, /* used to send state to central controller */
 
     is_busy: Arc<Mutex<bool>>,
@@ -38,26 +37,42 @@ impl ElevatorController {
     }
 
     /* Receive a channel receiver and listen to each request made by central controller */
-    pub async fn listen_request(&self, signal_receiver: Receiver<usize>) {
+    pub async fn listen_request(&self, signal_receiver: Receiver<ElevatorRequest>) {
         let mut bind = signal_receiver;
 
         loop {
             match bind.recv().await {
-                Ok(requested_floor) => {
+                Ok(request) => {
                     /* drop request as already in request queue */
+                    let mut destination_list = self.destination_list.lock().await;
+
                     let mut destination_map = self.destination_map.lock().await;
-                    let in_destination_list = destination_map.get(&requested_floor);
+                    let in_destination_list = destination_map.get(&request.from);
                     match in_destination_list {
                         Some(_) => {
-                            continue;
+                            
                         }
-                        None => {}
+                        None => {
+                            /* append the request to the queue */
+                            println!("appending to queue : {}", request.from);
+                            destination_list.push_front(request.from);
+                            destination_map.insert(request.from, true);
+                        }
                     }
 
-                    /* append the request to the queue */
-                    let mut destination_list = self.destination_list.lock().await;
-                    destination_list.push_front(requested_floor);
-                    destination_map.insert(requested_floor, true);
+                    /* drop request as already in request queue */
+                    let in_destination_list = destination_map.get(&request.to);
+                    match in_destination_list {
+                        Some(_) => {
+                            
+                        }
+                        None => {
+                            /* append the request to the queue */
+                            println!("appending to queue : {}", request.to);
+                            destination_list.push_front(request.to);
+                            destination_map.insert(request.to, true);
+                        }
+                    }
 
                     /* if busy, quit. will be processed soon */
                     let mut busy = self.is_busy.lock().await;
@@ -109,8 +124,14 @@ impl ElevatorControllerI for ElevatorController {
         let mut elevator = self.state.lock().await;
 
         if destination == elevator.current_floor {
-            let _ = elevator.open_door();
-            return Ok(())
+            let _ = elevator.open_door().await;
+            let _ = self.state_transmitter.send(elevator.clone());
+            tokio::task::yield_now().await;
+
+            sleep(Duration::from_secs(5)).await;
+            _ = elevator.close_door().await;
+            let ok = self.state_transmitter.send(elevator.clone());
+            return Ok(());
         }
 
         elevator.initial_direction = elevator.direction.clone();
@@ -123,7 +144,7 @@ impl ElevatorControllerI for ElevatorController {
 
         elevator.is_moving = true;
 
-        let mut current_floor =  elevator.current_floor;
+        let mut current_floor = elevator.current_floor;
         loop {
             /* artificial delay, mimick a moving elevator */
             sleep(Duration::from_millis(1500)).await;
@@ -132,9 +153,7 @@ impl ElevatorControllerI for ElevatorController {
             /* send the state after movement */
             let ok = self.state_transmitter.send(elevator.clone());
             match ok {
-                Ok(_) => {
-
-                }
+                Ok(_) => {}
                 Err(e) => {
                     println!(
                         "got error on publishing elevator state {} {}",
@@ -146,14 +165,17 @@ impl ElevatorControllerI for ElevatorController {
 
             elevator.initial_direction = elevator.direction.clone();
             if current_floor == destination {
-                println!("Elevator {} arrived at destination {}", elevator.id, destination);
-                break
+                println!(
+                    "Elevator {} arrived at destination {}",
+                    elevator.id, destination
+                );
+                break;
             }
 
             /* decide where to go next */
             if elevator.direction == "up".to_string() {
                 current_floor = current_floor + 1;
-            }else if elevator.direction == "down".to_string(){
+            } else if elevator.direction == "down".to_string() {
                 current_floor = current_floor - 1;
             }
         }
@@ -170,6 +192,8 @@ impl ElevatorControllerI for ElevatorController {
         sleep(Duration::from_secs(5)).await;
         _ = elevator.close_door().await;
 
+        let _ = self.state_transmitter.send(elevator.clone());
+
         /* elevator becomes idle? */
         if self.destination_list.lock().await.len() == 0 as usize {
             println!("Elevator becomes idle: {}", elevator.id);
@@ -180,9 +204,7 @@ impl ElevatorControllerI for ElevatorController {
             tokio::task::yield_now().await;
 
             match ok {
-                Ok(_) => {
-
-                }
+                Ok(_) => {}
                 Err(e) => {
                     println!(
                         "got error on publishing elevator state {} {}",

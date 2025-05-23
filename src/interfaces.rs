@@ -15,7 +15,7 @@ pub trait ElevatorControllerI {
 }
 
 pub trait CentralElevatorControllerI {
-    async fn call_for_an_elevator(&self, floor: usize, destination: String) -> Result<(), Error>;
+    async fn call_for_an_elevator(&self, floor: usize, destination: usize) -> Result<usize, Error>;
     async fn print_states(&self);
 }
 
